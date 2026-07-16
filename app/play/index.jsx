@@ -9,7 +9,8 @@ import { useSharedValue } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
 import { LINES } from "../utils/LINE_TRIGGER";
 import SkiaLine from "../components/SkiaLine";
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
+import { useLocalSearchParams } from "expo-router";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -122,6 +123,29 @@ function clearId(lineId) {
 }
 
 export default function AnimatedDashedLines() {
+  const { restart } = useLocalSearchParams();
+
+  // This runs every time the screen is mounted OR when restart param changes
+  useEffect(() => {
+    if (restart) {
+      console.log("🔄 Full Game Reset Triggered!");
+
+      // Reset shared values from your main game file
+      onTap.value = 0;
+      activeLineId.value = null;
+
+      // Restore all LINE_TRIGGERS (very important)
+      LINES.forEach((line) => {
+        const dots = LINE_DOTS_MAP[line.id];
+        for (const { row, col } of dots) {
+          LINE_TRIGGERS[row][col] = line.id;
+        }
+      });
+
+      // You can add more resets here if needed
+    }
+  }, [restart]); // ← This is the key: runs
+
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);

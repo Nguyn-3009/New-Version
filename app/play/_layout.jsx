@@ -1,10 +1,26 @@
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { Pressable, View } from "react-native";
+import { Pressable, View, Alert } from "react-native";
 
 export default function PlayLayout() {
   const router = useRouter();
   const params = useLocalSearchParams();
+
+  const handleRestart = () => {
+    Alert.alert("Restart Game", "Reset everything and start fresh?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Restart",
+        style: "destructive",
+        onPress: () => {
+          router.replace({
+            pathname: "/play",
+            params: { restart: Date.now().toString() },
+          });
+        },
+      },
+    ]);
+  };
 
   // Pull the logged past tab path, default back to Home ("/") if undefined
   const targetBackPath = params.previousTab || "/";
@@ -28,6 +44,11 @@ export default function PlayLayout() {
               <View>
                 <Ionicons name="caret-back" size={30} color="black" />
               </View>
+            </Pressable>
+          ),
+          headerRight: () => (
+            <Pressable onPress={handleRestart} style={{ marginRight: 15 }}>
+              <Ionicons name="refresh-circle" size={28} color="#E24B4A" />
             </Pressable>
           ),
         }}
