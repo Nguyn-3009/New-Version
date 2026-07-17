@@ -5,7 +5,7 @@ import {
   GestureDetector,
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
-import { useSharedValue } from "react-native-reanimated";
+import { useSharedValue, makeMutable } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
 import { LINES } from "../utils/LINE_TRIGGER";
 import SkiaLine from "../components/SkiaLine";
@@ -23,7 +23,14 @@ const GRID_COLS = 101;
 const DOT_SPACING = 20;
 const HITBOX = 48;
 
-export const onTap = useSharedValue(0);
+// Module-scope shared state must use makeMutable, not the useSharedValue hook
+// (hooks can only be called during a component's render).
+export const onTap = makeMutable(0);
+
+// Bumped on every restart so each SkiaLine instance knows to reset its own
+// in-flight animation progress (arrows that were mid-flight otherwise stay
+// wherever they were, since SkiaLine components aren't remounted on restart).
+export const resetSignal = makeMutable(0);
 
 function expandSegments(points) {
   const allDots = [];
@@ -55,16 +62,22 @@ function expandSegments(points) {
   return allDots;
 }
 
-// Build triggers map from the data
-export const LINE_TRIGGERS = Array.from({ length: GRID_ROWS }, () =>
-  Array(GRID_COLS).fill(null),
+// Build triggers map from the data.
+// This is a shared value (not a plain array) because it's read/written from
+// both worklets (UI thread: isThrough, clearId, the tap gesture) and plain JS
+// (restart reset in the effect below). A plain object mutated from both sides
+// goes stale on one side once Reanimated has cloned it for the UI thread —
+// that's what produced the "already passed to a worklet" warning and the
+// "won't move after restart" bug.
+export const LINE_TRIGGERS = makeMutable(
+  Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(null)),
 );
 
 for (const line of LINES) {
   const dots = expandSegments(line.points);
 
   for (const { row, col } of dots) {
-    LINE_TRIGGERS[row][col] = line.id;
+    LINE_TRIGGERS.value[row][col] = line.id;
   }
 }
 
@@ -99,7 +112,7 @@ function isThrough(lineId) {
   let col = last.col + dCol;
 
   while (row >= 0 && col >= 0 && row < 101 && col < 101) {
-    const hit = LINE_TRIGGERS[row][col];
+    const hit = LINE_TRIGGERS.value[row][col];
 
     // 🔥 hit another line
     if (hit && hit !== lineId) {
@@ -118,7 +131,7 @@ function clearId(lineId) {
   const dots = LINE_DOTS_MAP[lineId];
 
   for (const { row, col } of dots) {
-    LINE_TRIGGERS[row][col] = null;
+    LINE_TRIGGERS.value[row][col] = null;
   }
 }
 
@@ -138,9 +151,12 @@ export default function AnimatedDashedLines() {
       LINES.forEach((line) => {
         const dots = LINE_DOTS_MAP[line.id];
         for (const { row, col } of dots) {
-          LINE_TRIGGERS[row][col] = line.id;
+          LINE_TRIGGERS.value[row][col] = line.id;
         }
       });
+
+      // Tell every SkiaLine to reset its own in-flight progress/isMoving state
+      resetSignal.value = resetSignal.value + 1;
 
       // You can add more resets here if needed
     }
@@ -196,7 +212,7 @@ export default function AnimatedDashedLines() {
           dotY >= topLeftY &&
           dotY <= bottomRightY
         ) {
-          const lineId = LINE_TRIGGERS[r][c];
+          const lineId = LINE_TRIGGERS.value[r][c];
           if (lineId) {
             onTap.value++;
             foundLineId = lineId;

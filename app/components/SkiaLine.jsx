@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { Path, Skia, Group, point } from "@shopify/react-native-skia";
-import { LINE_TRIGGERS } from "../play/index";
+import { LINE_TRIGGERS, onTap, resetSignal } from "../play/index";
 import {
   useSharedValue,
   useAnimatedReaction,
@@ -9,7 +9,6 @@ import {
   withSpring,
   Easing,
 } from "react-native-reanimated";
-import { onTap } from "../play/index";
 
 const DOT_SPACING = 20;
 const GRID_OFFSET = { x: 40, y: 40 };
@@ -158,6 +157,19 @@ export default function SkiaLine({
   const progress = useSharedValue(0);
   const isMoving = useSharedValue(false);
 
+  // Reset this arrow's own animation state on restart. Since SkiaLine
+  // components aren't remounted on restart (same key, same list), progress/
+  // isMoving would otherwise keep whatever value they had before the restart.
+  useAnimatedReaction(
+    () => resetSignal.value,
+    (curr, prev) => {
+      if (prev !== null && curr !== prev) {
+        progress.value = 0;
+        isMoving.value = false;
+      }
+    },
+  );
+
   // Moving forward
   useAnimatedReaction(
     () => onTap.value,
@@ -192,11 +204,11 @@ export default function SkiaLine({
 
     if (
       row >= 0 &&
-      row < LINE_TRIGGERS.length &&
+      row < LINE_TRIGGERS.value.length &&
       col >= 0 &&
-      col < LINE_TRIGGERS[0].length
+      col < LINE_TRIGGERS.value[0].length
     ) {
-      hit = LINE_TRIGGERS[row][col];
+      hit = LINE_TRIGGERS.value[row][col];
     }
 
     if (hit && hit !== id && isMoving.value) {
