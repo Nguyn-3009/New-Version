@@ -65,21 +65,33 @@ function expandSegments(points) {
 // Build triggers map from the data.
 // This is a shared value (not a plain array) because it's read/written from
 // both worklets (UI thread: isThrough, clearId, the tap gesture) and plain JS
-// (restart reset in the effect below). A plain object mutated from both sides
-// goes stale on one side once Reanimated has cloned it for the UI thread —
-// that's what produced the "already passed to a worklet" warning and the
-// "won't move after restart" bug.
-export const LINE_TRIGGERS = makeMutable(
-  Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(null)),
-);
+// (restart reset in the effect below).
+//
+// IMPORTANT: in Reanimated's new architecture (react-native-worklets), the
+// JS-thread and UI-thread copies of a shared value are only synchronized via
+// a *top-level* `.value = x` assignment. Deep/nested mutation like
+// `LINE_TRIGGERS.value[row][col] = x` silently mutates only whichever
+// thread's local copy you're on — it does NOT propagate across threads.
+// So we build the fully-populated grid as a plain object FIRST, then hand
+// the finished grid to makeMutable in one shot, instead of creating an empty
+// mutable and mutating it afterward (which left the UI thread's copy
+// permanently empty/null and made every tap a no-op).
+function buildTriggerGrid() {
+  const grid = Array.from({ length: GRID_ROWS }, () =>
+    Array(GRID_COLS).fill(null),
+  );
 
-for (const line of LINES) {
-  const dots = expandSegments(line.points);
-
-  for (const { row, col } of dots) {
-    LINE_TRIGGERS.value[row][col] = line.id;
+  for (const line of LINES) {
+    const dots = expandSegments(line.points);
+    for (const { row, col } of dots) {
+      grid[row][col] = line.id;
+    }
   }
+
+  return grid;
 }
+
+export const LINE_TRIGGERS = makeMutable(buildTriggerGrid());
 
 // Build line dots map for quick access when rendering
 const LINE_DOTS_MAP = LINES.reduce((acc, line) => {
@@ -147,13 +159,11 @@ export default function AnimatedDashedLines() {
       onTap.value = 0;
       activeLineId.value = null;
 
-      // Restore all LINE_TRIGGERS (very important)
-      LINES.forEach((line) => {
-        const dots = LINE_DOTS_MAP[line.id];
-        for (const { row, col } of dots) {
-          LINE_TRIGGERS.value[row][col] = line.id;
-        }
-      });
+      // Restore all LINE_TRIGGERS (very important).
+      // Assign a brand-new grid object wholesale rather than mutating the
+      // existing one in place — see the comment above buildTriggerGrid for
+      // why nested mutation doesn't sync across threads here.
+      LINE_TRIGGERS.value = buildTriggerGrid();
 
       // Tell every SkiaLine to reset its own in-flight progress/isMoving state
       resetSignal.value = resetSignal.value + 1;
