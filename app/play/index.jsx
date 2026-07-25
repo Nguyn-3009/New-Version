@@ -17,8 +17,8 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 const CANVAS_WIDTH = 2500;
 const CANVAS_HEIGHT = 2500;
 
-const GRID_ROWS = 101;
-const GRID_COLS = 101;
+const GRID_ROWS = 125;
+const GRID_COLS = 125;
 
 const DOT_SPACING = 20;
 const HITBOX = 48;
