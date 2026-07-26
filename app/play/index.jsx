@@ -323,7 +323,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f5f5",
   },
   contentContainer: {
-    width: CANVAS_WIDTH,
-    height: CANVAS_HEIGHT,
+    width: CANVAS_WIDTH + 2 * 40,
+    height: CANVAS_HEIGHT + 2 * 40,
   },
 });
