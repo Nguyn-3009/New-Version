@@ -9,16 +9,17 @@ import { useSharedValue, makeMutable } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
 import { LINES } from "../utils/LINE_TRIGGER";
 import SkiaLine from "../components/SkiaLine";
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
+import { getGridColors } from "../utils/gridImageStore";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 const CANVAS_WIDTH = 2500;
 const CANVAS_HEIGHT = 2500;
 
-const GRID_ROWS = 125;
-const GRID_COLS = 125;
+const GRID_ROWS = Math.ceil(CANVAS_HEIGHT / 20); // 125
+const GRID_COLS = Math.ceil(CANVAS_WIDTH / 20); // 125
 
 const DOT_SPACING = 20;
 const HITBOX = 48;
@@ -123,7 +124,7 @@ function isThrough(lineId) {
   let row = last.row + dRow;
   let col = last.col + dCol;
 
-  while (row >= 0 && col >= 0 && row < 101 && col < 101) {
+  while (row >= 0 && col >= 0 && row < GRID_ROWS && col < GRID_COLS) {
     const hit = LINE_TRIGGERS.value[row][col];
 
     // 🔥 hit another line
@@ -148,7 +149,18 @@ function clearId(lineId) {
 }
 
 export default function AnimatedDashedLines() {
-  const { restart } = useLocalSearchParams();
+  const { restart, photoReady } = useLocalSearchParams();
+
+  // A 125x125 color grid is far too large to pass through router params, so
+  // the photo screen stashes it in a plain module store and just bumps
+  // `photoReady` to tell us to go read it.
+  const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
+
+  useEffect(() => {
+    if (photoReady) {
+      setPhotoGridColors(getGridColors());
+    }
+  }, [photoReady]);
 
   // This runs every time the screen is mounted OR when restart param changes
   useEffect(() => {
@@ -253,9 +265,7 @@ export default function AnimatedDashedLines() {
 
     const paint = Skia.Paint();
 
-    paint.setColor(Skia.Color("#e1dddd"));
-
-    const radius = 1.5;
+    const radius = 5;
 
     const cols = Math.ceil(CANVAS_WIDTH / DOT_SPACING);
     const rows = Math.ceil(CANVAS_HEIGHT / DOT_SPACING);
@@ -265,19 +275,24 @@ export default function AnimatedDashedLines() {
         const x = 40 + c * DOT_SPACING;
         const y = 40 + r * DOT_SPACING;
 
+        // Milestone 1: color each dot from the photo's mapped grid when one
+        // has been loaded, otherwise fall back to the default dot color.
+        const cellColor = photoGridColors?.[r]?.[c] ?? "#766e6e";
+        paint.setColor(Skia.Color(cellColor));
+
         canvas.drawCircle(x, y, radius, paint);
       }
     }
 
     return recorder.finishRecordingAsPicture();
-  }, []);
+  }, [photoGridColors]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ResumableZoom
         style={styles.mapContainer}
+        maxScale={5}
         minScale={1}
-        maxScale={3}
         onTransform={onTransform}
       >
         <GestureDetector gesture={tapGesture}>

@@ -70,6 +70,7 @@ export default function RootLayout() {
       />
 
       <Tabs.Screen name="components/SkiaLine" options={{ href: null }} />
+      <Tabs.Screen name="photo" options={{ href: null }} />
     </Tabs>
   );
 }
