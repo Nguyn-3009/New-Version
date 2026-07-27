@@ -13,7 +13,7 @@ import { useRouter } from "expo-router";
 import { imageToGridColors } from "./utils/imageToGrid";
 import { setGridColors } from "./utils/gridImageStore";
 
-const GRID_SIZE = 125;
+const GRID_SIZE = 125; // 125x125 grid
 
 export default function PhotoScreen() {
   const router = useRouter();

@@ -190,7 +190,13 @@ export default function AnimatedDashedLines() {
 
   const activeLineId = useSharedValue(null);
 
-  const onTransform = ({ scale: s, translateX: tx, translateY: ty }) => {
+  // react-native-zoom-toolkit's ResumableZoom calls `onUpdate`, not
+  // `onTransform` — the prop name used before doesn't exist on the
+  // component, so this callback was silently never firing. scale/
+  // translateX/translateY were stuck at their initial values (1, 0, 0) the
+  // moment you panned or zoomed at all, which throws off tap-hit detection.
+  const onUpdate = ({ scale: s, translateX: tx, translateY: ty }) => {
+    "worklet";
     scale.value = s;
     translateX.value = tx;
     translateY.value = ty;
@@ -216,11 +222,22 @@ export default function AnimatedDashedLines() {
     const offsetX = 40;
     const offsetY = 40;
 
-    const startCol = Math.floor((topLeftX - offsetX) / DOT_SPACING);
-    const endCol = Math.floor((bottomRightX - offsetX) / DOT_SPACING);
+    const rawStartCol = Math.floor((topLeftX - offsetX) / DOT_SPACING);
+    const rawEndCol = Math.floor((bottomRightX - offsetX) / DOT_SPACING);
 
-    const startRow = Math.floor((topLeftY - offsetY) / DOT_SPACING);
-    const endRow = Math.floor((bottomRightY - offsetY) / DOT_SPACING);
+    const rawStartRow = Math.floor((topLeftY - offsetY) / DOT_SPACING);
+    const rawEndRow = Math.floor((bottomRightY - offsetY) / DOT_SPACING);
+
+    // Clamp to the grid. Without this, a tap near the edge of the grid can
+    // push these past [0, GRID_COLS - 1] / [0, GRID_ROWS - 1], and
+    // LINE_TRIGGERS.value[r] is undefined out there — indexing into
+    // undefined[c] throws inside this worklet (UI thread), which crashes
+    // the whole app instead of showing a JS error.
+    const startCol = Math.max(0, rawStartCol);
+    const endCol = Math.min(GRID_COLS - 1, rawEndCol);
+
+    const startRow = Math.max(0, rawStartRow);
+    const endRow = Math.min(GRID_ROWS - 1, rawEndRow);
 
     let foundLineId = null;
     for (let r = startRow; r <= endRow; r++) {
@@ -293,7 +310,7 @@ export default function AnimatedDashedLines() {
         style={styles.mapContainer}
         maxScale={5}
         minScale={1}
-        onTransform={onTransform}
+        onUpdate={onUpdate}
       >
         <GestureDetector gesture={tapGesture}>
           <View style={styles.contentContainer}>
