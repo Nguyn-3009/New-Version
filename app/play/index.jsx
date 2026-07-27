@@ -205,14 +205,26 @@ export default function AnimatedDashedLines() {
   const tapGesture = Gesture.Tap().onEnd((e) => {
     "worklet";
 
-    const x = e.x;
-    const y = e.y;
+    // e.x/e.y are already local to `contentContainer`, which sits INSIDE
+    // ResumableZoom's transformed Animated.View. React Native Gesture
+    // Handler's native hit-testing already accounts for that ancestor's
+    // pan/zoom transform when computing local coordinates — so these are
+    // already canvas-space coordinates. Manually subtracting translateX/Y
+    // and dividing by scale again here was double-correcting: it happened
+    // to cancel out to a no-op while translateX/translateY/scale were
+    // (incorrectly) frozen at their defaults (0, 0, 1), which is why taps
+    // "worked" before onUpdate was wired up — but once those values started
+    // reflecting real pan/zoom state, this was over-correcting and sending
+    // every tap to the wrong grid cell.
+    const canvasX = e.x;
+    const canvasY = e.y;
 
     const half = HITBOX / 2;
 
-    const canvasX = (x - translateX.value) / scale.value;
-    const canvasY = (y - translateY.value) / scale.value;
-
+    // scale.value IS still needed here though: it converts a fixed physical
+    // screen-pixel tap tolerance into the equivalent canvas-space tolerance,
+    // so the *finger-sized* hit area stays consistent regardless of zoom
+    // level (zoomed in, a screen-sized tap covers fewer canvas units).
     const topLeftX = canvasX - half / scale.value;
     const topLeftY = canvasY - half / scale.value;
 
