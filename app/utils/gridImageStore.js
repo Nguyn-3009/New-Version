@@ -7,6 +7,8 @@
 // color grid is far too large to pass through router params directly.
 
 let gridColors = null;
+let gridLabels = null; // per-cell cluster index from kMeansQuantizeColors, -1 = background
+let gridPalette = null; // the K {r,g,b} cluster colors actually used
 
 export function setGridColors(colors) {
   gridColors = colors;
@@ -16,6 +18,25 @@ export function getGridColors() {
   return gridColors;
 }
 
+// labelGrid/palette are the extra output of kMeansQuantizeColors() - stashed
+// alongside gridColors so a later step (grouping same-color cells into
+// arrows) can look cells up by cluster index instead of re-parsing color
+// strings.
+export function setGridQuantization(labels, palette) {
+  gridLabels = labels;
+  gridPalette = palette;
+}
+
+export function getGridLabels() {
+  return gridLabels;
+}
+
+export function getGridPalette() {
+  return gridPalette;
+}
+
 export function clearGridColors() {
   gridColors = null;
+  gridLabels = null;
+  gridPalette = null;
 }

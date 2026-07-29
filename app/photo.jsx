@@ -10,10 +10,11 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import { imageToGridColors } from "./utils/imageToGrid";
-import { setGridColors } from "./utils/gridImageStore";
+import { imageToGridColors, kMeansQuantizeColors } from "./utils/imageToGrid";
+import { setGridColors, setGridQuantization } from "./utils/gridImageStore";
 
 const GRID_SIZE = 125; // 125x125 grid
+const PALETTE_SIZE = 32; // K for K-Means color quantization
 
 export default function PhotoScreen() {
   const router = useRouter();
@@ -68,8 +69,13 @@ export default function PhotoScreen() {
 
     setProcessing(true);
     try {
-      const colors = await imageToGridColors(previewUri, GRID_SIZE);
-      setGridColors(colors);
+      const rawColors = await imageToGridColors(previewUri, GRID_SIZE);
+      const { quantizedColorGrid, labelGrid, palette } = kMeansQuantizeColors(
+        rawColors,
+        { k: PALETTE_SIZE },
+      );
+      setGridColors(quantizedColorGrid);
+      setGridQuantization(labelGrid, palette);
       router.replace({
         pathname: "/play",
         params: { photoReady: Date.now().toString() },

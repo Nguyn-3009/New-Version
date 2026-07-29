@@ -294,7 +294,7 @@ export default function AnimatedDashedLines() {
 
     const paint = Skia.Paint();
 
-    const radius = 5;
+    const radius = 10;
 
     const cols = Math.ceil(CANVAS_WIDTH / DOT_SPACING);
     const rows = Math.ceil(CANVAS_HEIGHT / DOT_SPACING);
@@ -354,5 +354,6 @@ const styles = StyleSheet.create({
   contentContainer: {
     width: CANVAS_WIDTH + 2 * 40,
     height: CANVAS_HEIGHT + 2 * 40,
+    marginTop: 70,
   },
 });
