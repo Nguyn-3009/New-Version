@@ -7,11 +7,11 @@ import {
 } from "react-native-gesture-handler";
 import { useSharedValue, makeMutable } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
-import { LINES } from "../utils/LINE_TRIGGER";
+import { LINES as STATIC_LINES } from "../utils/LINE_TRIGGER";
 import SkiaLine from "../components/SkiaLine";
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
-import { getGridColors } from "../utils/gridImageStore";
+import { getGridColors, getGeneratedLines } from "../utils/gridImageStore";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -63,10 +63,18 @@ function expandSegments(points) {
   return allDots;
 }
 
+// Whichever lines are "active" right now: photo-generated ones if a photo's
+// been processed this session (the store persists across navigation, so
+// this can already be populated even before the component's first render),
+// falling back to the static demo puzzle otherwise.
+function getActiveLinesSnapshot() {
+  return getGeneratedLines() ?? STATIC_LINES;
+}
+
 // Build triggers map from the data.
 // This is a shared value (not a plain array) because it's read/written from
 // both worklets (UI thread: isThrough, clearId, the tap gesture) and plain JS
-// (restart reset in the effect below).
+// (restart/photo-load reset in the effects below).
 //
 // IMPORTANT: in Reanimated's new architecture (react-native-worklets), the
 // JS-thread and UI-thread copies of a shared value are only synchronized via
@@ -77,12 +85,12 @@ function expandSegments(points) {
 // the finished grid to makeMutable in one shot, instead of creating an empty
 // mutable and mutating it afterward (which left the UI thread's copy
 // permanently empty/null and made every tap a no-op).
-function buildTriggerGrid() {
+function buildTriggerGrid(lines) {
   const grid = Array.from({ length: GRID_ROWS }, () =>
     Array(GRID_COLS).fill(null),
   );
 
-  for (const line of LINES) {
+  for (const line of lines) {
     const dots = expandSegments(line.points);
     for (const { row, col } of dots) {
       grid[row][col] = line.id;
@@ -92,13 +100,24 @@ function buildTriggerGrid() {
   return grid;
 }
 
-export const LINE_TRIGGERS = makeMutable(buildTriggerGrid());
+function buildLineDotsMap(lines) {
+  return lines.reduce((acc, line) => {
+    acc[line.id] = expandSegments(line.points);
+    return acc;
+  }, {});
+}
 
-// Build line dots map for quick access when rendering
-const LINE_DOTS_MAP = LINES.reduce((acc, line) => {
-  acc[line.id] = expandSegments(line.points);
-  return acc;
-}, {});
+export const LINE_TRIGGERS = makeMutable(
+  buildTriggerGrid(getActiveLinesSnapshot()),
+);
+
+// LINE_DOTS_MAP is read from isThrough/clearId (worklets, UI thread) just
+// like LINE_TRIGGERS, and — same as LINE_TRIGGERS — needs to be swappable at
+// runtime once a photo generates a brand new set of lines, so it needs the
+// same makeMutable treatment rather than being a plain object.
+export const LINE_DOTS_MAP = makeMutable(
+  buildLineDotsMap(getActiveLinesSnapshot()),
+);
 
 function getDirection(dots) {
   "worklet";
@@ -115,7 +134,7 @@ function getDirection(dots) {
 function isThrough(lineId) {
   "worklet";
 
-  const dots = LINE_DOTS_MAP[lineId];
+  const dots = LINE_DOTS_MAP.value[lineId];
 
   const last = dots[dots.length - 1];
 
@@ -141,7 +160,7 @@ function isThrough(lineId) {
 
 function clearId(lineId) {
   "worklet";
-  const dots = LINE_DOTS_MAP[lineId];
+  const dots = LINE_DOTS_MAP.value[lineId];
 
   for (const { row, col } of dots) {
     LINE_TRIGGERS.value[row][col] = null;
@@ -156,9 +175,40 @@ export default function AnimatedDashedLines() {
   // `photoReady` to tell us to go read it.
   const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
 
+  // Whichever LINES are currently playable — the static demo puzzle until a
+  // photo's been processed, then whatever generateLinesData produced.
+  const [activeLines, setActiveLines] = useState(getActiveLinesSnapshot);
+
+  // Restart needs the LATEST active lines to rebuild from, but shouldn't
+  // itself re-run just because activeLines changed (that's photoReady's
+  // job, below) — a ref sidesteps the stale-closure problem without adding
+  // activeLines to the restart effect's dependency array.
+  const activeLinesRef = useRef(activeLines);
+  useEffect(() => {
+    activeLinesRef.current = activeLines;
+  }, [activeLines]);
+
   useEffect(() => {
     if (photoReady) {
       setPhotoGridColors(getGridColors());
+
+      const newLines = getGeneratedLines();
+      if (newLines) {
+        console.log("🖼️ New photo-generated lines loaded:", newLines.length);
+
+
+        setActiveLines(newLines);
+
+        // A whole new puzzle is basically a fresh game: rebuild the trigger
+        // grids from the new lines and reset the same shared state restart
+        // does. Same reasoning as buildTriggerGrid's comment above — build
+        // fresh plain objects first, then assign wholesale.
+        LINE_TRIGGERS.value = buildTriggerGrid(newLines);
+        LINE_DOTS_MAP.value = buildLineDotsMap(newLines);
+        onTap.value = 0;
+        activeLineId.value = null;
+        resetSignal.value = resetSignal.value + 1;
+      }
     }
   }, [photoReady]);
 
@@ -174,8 +224,12 @@ export default function AnimatedDashedLines() {
       // Restore all LINE_TRIGGERS (very important).
       // Assign a brand-new grid object wholesale rather than mutating the
       // existing one in place — see the comment above buildTriggerGrid for
-      // why nested mutation doesn't sync across threads here.
-      LINE_TRIGGERS.value = buildTriggerGrid();
+      // why nested mutation doesn't sync across threads here. Rebuilds from
+      // whatever lines are CURRENTLY active (the photo-generated puzzle, if
+      // one's loaded) rather than always the static default.
+      const lines = activeLinesRef.current;
+      LINE_TRIGGERS.value = buildTriggerGrid(lines);
+      LINE_DOTS_MAP.value = buildLineDotsMap(lines);
 
       // Tell every SkiaLine to reset its own in-flight progress/isMoving state
       resetSignal.value = resetSignal.value + 1;
@@ -329,7 +383,7 @@ export default function AnimatedDashedLines() {
             <Canvas style={StyleSheet.absoluteFillObject}>
               <Picture picture={gridPicture} />
 
-              {LINES.map((line) => (
+              {activeLines.map((line) => (
                 <SkiaLine
                   key={line.id}
                   id={line.id}

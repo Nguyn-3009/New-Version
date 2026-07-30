@@ -11,10 +11,15 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { imageToGridColors, kMeansQuantizeColors } from "./utils/imageToGrid";
-import { setGridColors, setGridQuantization } from "./utils/gridImageStore";
+import { generateLinesData } from "./utils/generateLines";
+import {
+  setGridColors,
+  setGridQuantization,
+  setGeneratedLines,
+} from "./utils/gridImageStore";
 
 const GRID_SIZE = 125; // 125x125 grid
-const PALETTE_SIZE = 32; // K for K-Means color quantization
+const PALETTE_SIZE = 4; // K for K-Means color quantization
 
 export default function PhotoScreen() {
   const router = useRouter();
@@ -76,6 +81,10 @@ export default function PhotoScreen() {
       );
       setGridColors(quantizedColorGrid);
       setGridQuantization(labelGrid, palette);
+
+      const { lines, blanks } = generateLinesData(labelGrid, palette);
+      setGeneratedLines(lines, blanks);
+
       router.replace({
         pathname: "/play",
         params: { photoReady: Date.now().toString() },

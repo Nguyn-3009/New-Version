@@ -9,6 +9,8 @@
 let gridColors = null;
 let gridLabels = null; // per-cell cluster index from kMeansQuantizeColors, -1 = background
 let gridPalette = null; // the K {r,g,b} cluster colors actually used
+let generatedLines = null; // output of generateLinesData: [{id,color,points}, ...]
+let generatedBlanks = null; // cells generateLinesData couldn't assign to any line
 
 export function setGridColors(colors) {
   gridColors = colors;
@@ -35,8 +37,26 @@ export function getGridPalette() {
   return gridPalette;
 }
 
+// generateLinesData()'s output - the actual gameplay LINES data for
+// play/index.jsx to build its trigger grid from, replacing the static
+// LINE_TRIGGER.js data for a photo-generated puzzle.
+export function setGeneratedLines(lines, blanks) {
+  generatedLines = lines;
+  generatedBlanks = blanks;
+}
+
+export function getGeneratedLines() {
+  return generatedLines;
+}
+
+export function getGeneratedBlanks() {
+  return generatedBlanks;
+}
+
 export function clearGridColors() {
   gridColors = null;
   gridLabels = null;
   gridPalette = null;
+  generatedLines = null;
+  generatedBlanks = null;
 }
