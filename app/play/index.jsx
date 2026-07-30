@@ -7,11 +7,11 @@ import {
 } from "react-native-gesture-handler";
 import { useSharedValue, makeMutable } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
-import { LINES as STATIC_LINES } from "../utils/LINE_TRIGGER";
+import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
 import SkiaLine from "../components/SkiaLine";
 import { useMemo, useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
-import { getGridColors, getGeneratedLines } from "../utils/gridImageStore";
+import { getGridColors, getGeneratedLines } from "../../utils/gridImageStore";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -383,15 +383,7 @@ export default function AnimatedDashedLines() {
             <Canvas style={StyleSheet.absoluteFillObject}>
               <Picture picture={gridPicture} />
 
-              {activeLines.map((line) => (
-                <SkiaLine
-                  key={line.id}
-                  id={line.id}
-                  activeLineId={activeLineId}
-                  color={line.color}
-                  points={line.points}
-                />
-              ))}
+              
             </Canvas>
           </View>
         </GestureDetector>
