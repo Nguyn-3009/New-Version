@@ -448,8 +448,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f5f5",
   },
   contentContainer: {
-    width: CANVAS_WIDTH + 2 * GRID_OFFSET_X,
-    height: CANVAS_HEIGHT + 2 * GRID_OFFSET_Y,
+    width: 900,
+    height: 900,
     marginTop: 70,
   },
 });
