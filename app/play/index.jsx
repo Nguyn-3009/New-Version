@@ -383,7 +383,15 @@ export default function AnimatedDashedLines() {
             <Canvas style={StyleSheet.absoluteFillObject}>
               <Picture picture={gridPicture} />
 
-              
+              {/* {activeLines.map((line) => (
+                <SkiaLine
+                  key={line.id}
+                  id={line.id}
+                  activeLineId={activeLineId}
+                  color={line.color}
+                  points={line.points}
+                />
+              ))} */}
             </Canvas>
           </View>
         </GestureDetector>
