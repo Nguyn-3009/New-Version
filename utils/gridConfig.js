@@ -3,8 +3,8 @@
 // change to DOT_SPACING in one place silently desynced tap detection from
 // rendering.
 
-export const CANVAS_WIDTH = 2500;
-export const CANVAS_HEIGHT = 2500;
+export const CANVAS_WIDTH = 200;
+export const CANVAS_HEIGHT = 200;
 
 export const DOT_SPACING = 20;
 export const GRID_OFFSET_X = 40;

@@ -47,7 +47,7 @@ export default function PlayLayout() {
             </Pressable>
           ),
           headerRight: () => (
-            <Pressable onPress={handleRestart} style={{ marginRight: 15 }}>
+            <Pressable onPress={handleRestart}>
               <Ionicons name="refresh-circle" size={28} color="#E24B4A" />
             </Pressable>
           ),
