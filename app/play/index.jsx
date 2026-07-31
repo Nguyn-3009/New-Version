@@ -1,37 +1,59 @@
-import { View, StyleSheet, Dimensions } from "react-native";
+import { View, StyleSheet } from "react-native";
 import { ResumableZoom } from "react-native-zoom-toolkit";
 import {
   Gesture,
   GestureDetector,
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
-import { useSharedValue, makeMutable } from "react-native-reanimated";
+import { useSharedValue, useFrameCallback } from "react-native-reanimated";
 import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
-import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
-import SkiaLine from "../components/SkiaLine";
 import { useMemo, useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
+
+import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
 import { getGridColors, getGeneratedLines } from "../../utils/gridImageStore";
+import BatchedLines from "../../components/BatchedLines";
+import {
+  compileLines,
+  canvasToCell,
+  pointAtLength,
+} from "../../utils/lineBatch";
+import {
+  CANVAS_HEIGHT,
+  CANVAS_WIDTH,
+  DEFAULT_DOT_COLOR,
+  DOT_RADIUS,
+  DOT_SPACING,
+  FORWARD_RATE,
+  GRID_COLS,
+  GRID_OFFSET_X,
+  GRID_OFFSET_Y,
+  GRID_ROWS,
+  HITBOX,
+  MAX_PROGRESS,
+  RETURN_MS,
+  SPEED,
+} from "../../utils/gridConfig";
+import {
+  COMPILED,
+  LINE_DOTS_MAP,
+  LINE_ESCAPED,
+  LINE_IDLE,
+  LINE_MOVING,
+  LINE_RETURNING,
+  LINE_TRIGGERS,
+  activeList,
+  frameTick,
+  lineState,
+  onTap,
+  progress,
+  returnRate,
+  staticEpoch,
+} from "../../utils/gameShared";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-
-const CANVAS_WIDTH = 2500;
-const CANVAS_HEIGHT = 2500;
-
-const GRID_ROWS = Math.ceil(CANVAS_HEIGHT / 20); // 125
-const GRID_COLS = Math.ceil(CANVAS_WIDTH / 20); // 125
-
-const DOT_SPACING = 20;
-const HITBOX = 48;
-
-// Module-scope shared state must use makeMutable, not the useSharedValue hook
-// (hooks can only be called during a component's render).
-export const onTap = makeMutable(0);
-
-// Bumped on every restart so each SkiaLine instance knows to reset its own
-// in-flight animation progress (arrows that were mid-flight otherwise stay
-// wherever they were, since SkiaLine components aren't remounted on restart).
-export const resetSignal = makeMutable(0);
+// ---------------------------------------------------------------------------
+// Puzzle loading
+// ---------------------------------------------------------------------------
 
 function expandSegments(points) {
   const allDots = [];
@@ -41,21 +63,18 @@ function expandSegments(points) {
     const to = points[i + 1];
 
     if (from.row === to.row) {
-      // Horizontal
       const step = from.col < to.col ? 1 : -1;
       for (let c = from.col; ; c += step) {
         allDots.push({ row: from.row, col: c });
         if (c === to.col) break;
       }
     } else if (from.col === to.col) {
-      // Vertical
       const step = from.row < to.row ? 1 : -1;
       for (let r = from.row; ; r += step) {
         allDots.push({ row: r, col: from.col });
         if (r === to.row) break;
       }
     } else {
-      // Diagonal support (if you ever need it later)
       console.warn("Diagonal lines not supported yet");
     }
   }
@@ -63,36 +82,13 @@ function expandSegments(points) {
   return allDots;
 }
 
-// Whichever lines are "active" right now: photo-generated ones if a photo's
-// been processed this session (the store persists across navigation, so
-// this can already be populated even before the component's first render),
-// falling back to the static demo puzzle otherwise.
-function getActiveLinesSnapshot() {
-  return getGeneratedLines() ?? STATIC_LINES;
-}
-
-// Build triggers map from the data.
-// This is a shared value (not a plain array) because it's read/written from
-// both worklets (UI thread: isThrough, clearId, the tap gesture) and plain JS
-// (restart/photo-load reset in the effects below).
-//
-// IMPORTANT: in Reanimated's new architecture (react-native-worklets), the
-// JS-thread and UI-thread copies of a shared value are only synchronized via
-// a *top-level* `.value = x` assignment. Deep/nested mutation like
-// `LINE_TRIGGERS.value[row][col] = x` silently mutates only whichever
-// thread's local copy you're on — it does NOT propagate across threads.
-// So we build the fully-populated grid as a plain object FIRST, then hand
-// the finished grid to makeMutable in one shot, instead of creating an empty
-// mutable and mutating it afterward (which left the UI thread's copy
-// permanently empty/null and made every tap a no-op).
 function buildTriggerGrid(lines) {
   const grid = Array.from({ length: GRID_ROWS }, () =>
     Array(GRID_COLS).fill(null),
   );
 
   for (const line of lines) {
-    const dots = expandSegments(line.points);
-    for (const { row, col } of dots) {
+    for (const { row, col } of expandSegments(line.points)) {
       grid[row][col] = line.id;
     }
   }
@@ -107,37 +103,60 @@ function buildLineDotsMap(lines) {
   }, {});
 }
 
-export const LINE_TRIGGERS = makeMutable(
-  buildTriggerGrid(getActiveLinesSnapshot()),
-);
+function getActiveLinesSnapshot() {
+  return getGeneratedLines() ?? STATIC_LINES;
+}
 
-// LINE_DOTS_MAP is read from isThrough/clearId (worklets, UI thread) just
-// like LINE_TRIGGERS, and — same as LINE_TRIGGERS — needs to be swappable at
-// runtime once a photo generates a brand new set of lines, so it needs the
-// same makeMutable treatment rather than being a plain object.
-export const LINE_DOTS_MAP = makeMutable(
-  buildLineDotsMap(getActiveLinesSnapshot()),
-);
+/**
+ * Swap in a whole new puzzle. Every shared value below is set with a
+ * TOP-LEVEL assignment, which is the only form that synchronises the JS and
+ * UI copies — same reasoning as the original buildTriggerGrid comment, now
+ * applied to the animation arrays too.
+ *
+ * After this returns, the UI thread owns progress/lineState/returnRate/
+ * activeList outright: JS never touches their contents again until the next
+ * load, so per-frame mutation costs nothing.
+ */
+function loadPuzzle(lines) {
+  const compiled = compileLines(lines);
+
+  LINE_TRIGGERS.value = buildTriggerGrid(lines);
+  LINE_DOTS_MAP.value = buildLineDotsMap(lines);
+  COMPILED.value = compiled;
+
+  progress.value = new Array(compiled.count).fill(0);
+  lineState.value = new Array(compiled.count).fill(LINE_IDLE);
+  returnRate.value = new Array(compiled.count).fill(0);
+  activeList.value = [];
+
+  onTap.value = 0;
+  staticEpoch.value = staticEpoch.value + 1;
+  frameTick.value = frameTick.value + 1;
+
+  return compiled;
+}
+
+// Load once at module scope, exactly as the old LINE_TRIGGERS/LINE_DOTS_MAP
+// makeMutable calls did — the store can already hold a photo-generated puzzle
+// before this screen first renders.
+const INITIAL_LINES = getActiveLinesSnapshot();
+const INITIAL_COMPILED = loadPuzzle(INITIAL_LINES);
+
+// ---------------------------------------------------------------------------
+// Escape logic (unchanged, just reading from gameShared now)
+// ---------------------------------------------------------------------------
 
 function getDirection(dots) {
   "worklet";
-
   const last = dots[dots.length - 1];
   const prev = dots[dots.length - 2];
-
-  return {
-    dRow: last.row - prev.row,
-    dCol: last.col - prev.col,
-  };
+  return { dRow: last.row - prev.row, dCol: last.col - prev.col };
 }
 
 function isThrough(lineId) {
   "worklet";
-
   const dots = LINE_DOTS_MAP.value[lineId];
-
   const last = dots[dots.length - 1];
-
   const { dRow, dCol } = getDirection(dots);
 
   let row = last.row + dRow;
@@ -145,12 +164,7 @@ function isThrough(lineId) {
 
   while (row >= 0 && col >= 0 && row < GRID_ROWS && col < GRID_COLS) {
     const hit = LINE_TRIGGERS.value[row][col];
-
-    // 🔥 hit another line
-    if (hit && hit !== lineId) {
-      return false;
-    }
-
+    if (hit && hit !== lineId) return false;
     row += dRow;
     col += dCol;
   }
@@ -160,95 +174,72 @@ function isThrough(lineId) {
 
 function clearId(lineId) {
   "worklet";
-  const dots = LINE_DOTS_MAP.value[lineId];
-
-  for (const { row, col } of dots) {
+  for (const { row, col } of LINE_DOTS_MAP.value[lineId]) {
     LINE_TRIGGERS.value[row][col] = null;
   }
 }
 
+/**
+ * Launch one line. Replaces the old dance of bumping `onTap` and having 875
+ * useAnimatedReaction hooks each wake up to check `activeLineId.value === id`.
+ * Now the tap just writes the two array slots that matter and pushes the
+ * index onto the active list.
+ */
+function launchLine(lineId) {
+  "worklet";
+  const C = COMPILED.value;
+  if (!C) return;
+
+  const i = C.indexById[lineId];
+  if (i === undefined) return;
+
+  const st = lineState.value;
+  if (st[i] !== LINE_IDLE) return; // already flying, bouncing, or gone
+
+  st[i] = LINE_MOVING;
+  progress.value[i] = 0;
+  activeList.value.push(i);
+
+  // It just left the resting layer, so that layer needs a rebuild.
+  staticEpoch.value = staticEpoch.value + 1;
+}
+
+// ---------------------------------------------------------------------------
+
 export default function AnimatedDashedLines() {
   const { restart, photoReady } = useLocalSearchParams();
 
-  // A 125x125 color grid is far too large to pass through router params, so
-  // the photo screen stashes it in a plain module store and just bumps
-  // `photoReady` to tell us to go read it.
   const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
+  const [compiled, setCompiled] = useState(INITIAL_COMPILED);
 
-  // Whichever LINES are currently playable — the static demo puzzle until a
-  // photo's been processed, then whatever generateLinesData produced.
-  const [activeLines, setActiveLines] = useState(getActiveLinesSnapshot);
-
-  // Restart needs the LATEST active lines to rebuild from, but shouldn't
-  // itself re-run just because activeLines changed (that's photoReady's
-  // job, below) — a ref sidesteps the stale-closure problem without adding
-  // activeLines to the restart effect's dependency array.
-  const activeLinesRef = useRef(activeLines);
-  useEffect(() => {
-    activeLinesRef.current = activeLines;
-  }, [activeLines]);
+  // Restart rebuilds from whatever lines are CURRENTLY loaded, so it has to
+  // track them independently of render — same reason the old code kept an
+  // activeLinesRef.
+  const activeLinesRef = useRef(INITIAL_LINES);
 
   useEffect(() => {
-    if (photoReady) {
-      setPhotoGridColors(getGridColors());
+    if (!photoReady) return;
 
-      const newLines = getGeneratedLines();
-      if (newLines) {
-        console.log("🖼️ New photo-generated lines loaded:", newLines.length);
+    setPhotoGridColors(getGridColors());
 
+    const newLines = getGeneratedLines();
+    if (!newLines) return;
 
-        setActiveLines(newLines);
-
-        // A whole new puzzle is basically a fresh game: rebuild the trigger
-        // grids from the new lines and reset the same shared state restart
-        // does. Same reasoning as buildTriggerGrid's comment above — build
-        // fresh plain objects first, then assign wholesale.
-        LINE_TRIGGERS.value = buildTriggerGrid(newLines);
-        LINE_DOTS_MAP.value = buildLineDotsMap(newLines);
-        onTap.value = 0;
-        activeLineId.value = null;
-        resetSignal.value = resetSignal.value + 1;
-      }
-    }
+    console.log("🖼️ New photo-generated lines loaded:", newLines.length);
+    activeLinesRef.current = newLines;
+    setCompiled(loadPuzzle(newLines));
   }, [photoReady]);
 
-  // This runs every time the screen is mounted OR when restart param changes
   useEffect(() => {
-    if (restart) {
-      console.log("🔄 Full Game Reset Triggered!");
-
-      // Reset shared values from your main game file
-      onTap.value = 0;
-      activeLineId.value = null;
-
-      // Restore all LINE_TRIGGERS (very important).
-      // Assign a brand-new grid object wholesale rather than mutating the
-      // existing one in place — see the comment above buildTriggerGrid for
-      // why nested mutation doesn't sync across threads here. Rebuilds from
-      // whatever lines are CURRENTLY active (the photo-generated puzzle, if
-      // one's loaded) rather than always the static default.
-      const lines = activeLinesRef.current;
-      LINE_TRIGGERS.value = buildTriggerGrid(lines);
-      LINE_DOTS_MAP.value = buildLineDotsMap(lines);
-
-      // Tell every SkiaLine to reset its own in-flight progress/isMoving state
-      resetSignal.value = resetSignal.value + 1;
-
-      // You can add more resets here if needed
-    }
-  }, [restart]); // ← This is the key: runs
+    if (!restart) return;
+    console.log("🔄 Full Game Reset Triggered!");
+    setCompiled(loadPuzzle(activeLinesRef.current));
+  }, [restart]);
 
   const scale = useSharedValue(1);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
 
-  const activeLineId = useSharedValue(null);
-
-  // react-native-zoom-toolkit's ResumableZoom calls `onUpdate`, not
-  // `onTransform` — the prop name used before doesn't exist on the
-  // component, so this callback was silently never firing. scale/
-  // translateX/translateY were stuck at their initial values (1, 0, 0) the
-  // moment you panned or zoomed at all, which throws off tap-hit detection.
   const onUpdate = ({ scale: s, translateX: tx, translateY: ty }) => {
     "worklet";
     scale.value = s;
@@ -256,60 +247,134 @@ export default function AnimatedDashedLines() {
     translateY.value = ty;
   };
 
+  // -------------------------------------------------------------------------
+  // The single animation driver.
+  //
+  // This replaces every per-line withTiming + useAnimatedReaction +
+  // useDerivedValue collision check. One callback, walking only the arrows
+  // that are actually in flight. When activeList empties it early-returns
+  // without touching frameTick, so an idle board triggers zero path rebuilds.
+  // -------------------------------------------------------------------------
+  useFrameCallback((frameInfo) => {
+    "worklet";
+    const dt = frameInfo.timeSincePreviousFrame;
+    if (dt == null) return;
+
+    const act = activeList.value;
+    if (!act || act.length === 0) return;
+
+    const C = COMPILED.value;
+    const grid = LINE_TRIGGERS.value;
+    if (!C || !grid) return;
+
+    const prog = progress.value;
+    const st = lineState.value;
+    const rate = returnRate.value;
+
+    const scratchPt = { x: 0, y: 0 };
+    const scratchCell = { row: 0, col: 0 };
+
+    let restingChanged = false;
+
+    // Reverse iteration so splicing finished arrows out doesn't skip entries.
+    for (let k = act.length - 1; k >= 0; k--) {
+      const i = act[k];
+
+      if (st[i] === LINE_MOVING) {
+        prog[i] += dt * FORWARD_RATE;
+
+        // Collision: where is the arrowhead, and does that cell belong to
+        // someone else? Same check the old per-line useDerivedValue did.
+        const headLen = prog[i] * SPEED + C.total[i];
+        const h = pointAtLength(
+          C.pts[i],
+          C.cum[i],
+          C.total[i],
+          C.ang[i],
+          headLen,
+          scratchPt,
+        );
+        canvasToCell(h.x, h.y, scratchCell);
+
+        let hit = null;
+        if (
+          scratchCell.row >= 0 &&
+          scratchCell.row < grid.length &&
+          scratchCell.col >= 0 &&
+          scratchCell.col < grid[0].length
+        ) {
+          hit = grid[scratchCell.row][scratchCell.col];
+        }
+
+        if (hit && hit !== C.ids[i]) {
+          // Blocked. Bounce back over RETURN_MS from wherever we got to.
+          st[i] = LINE_RETURNING;
+          rate[i] = prog[i] / RETURN_MS;
+        } else if (prog[i] >= MAX_PROGRESS) {
+          prog[i] = MAX_PROGRESS;
+          st[i] = LINE_ESCAPED;
+          act.splice(k, 1);
+          restingChanged = true;
+        }
+      } else if (st[i] === LINE_RETURNING) {
+        prog[i] -= dt * rate[i];
+        if (prog[i] <= 0) {
+          prog[i] = 0;
+          st[i] = LINE_IDLE;
+          act.splice(k, 1);
+          restingChanged = true;
+        }
+      } else {
+        act.splice(k, 1);
+        restingChanged = true;
+      }
+    }
+
+    if (restingChanged) staticEpoch.value = staticEpoch.value + 1;
+
+    // One bump per frame drives every active-layer path rebuild at once.
+    frameTick.value = frameTick.value + 1;
+  });
+
   const tapGesture = Gesture.Tap().onEnd((e) => {
     "worklet";
 
-    // e.x/e.y are already local to `contentContainer`, which sits INSIDE
-    // ResumableZoom's transformed Animated.View. React Native Gesture
-    // Handler's native hit-testing already accounts for that ancestor's
-    // pan/zoom transform when computing local coordinates — so these are
-    // already canvas-space coordinates. Manually subtracting translateX/Y
-    // and dividing by scale again here was double-correcting: it happened
-    // to cancel out to a no-op while translateX/translateY/scale were
-    // (incorrectly) frozen at their defaults (0, 0, 1), which is why taps
-    // "worked" before onUpdate was wired up — but once those values started
-    // reflecting real pan/zoom state, this was over-correcting and sending
-    // every tap to the wrong grid cell.
+    const grid = LINE_TRIGGERS.value;
+    if (!grid) return;
+
     const canvasX = e.x;
     const canvasY = e.y;
 
     const half = HITBOX / 2;
 
-    // scale.value IS still needed here though: it converts a fixed physical
-    // screen-pixel tap tolerance into the equivalent canvas-space tolerance,
-    // so the *finger-sized* hit area stays consistent regardless of zoom
-    // level (zoomed in, a screen-sized tap covers fewer canvas units).
     const topLeftX = canvasX - half / scale.value;
     const topLeftY = canvasY - half / scale.value;
-
     const bottomRightX = canvasX + half / scale.value;
     const bottomRightY = canvasY + half / scale.value;
 
-    const offsetX = 40;
-    const offsetY = 40;
-
-    const rawStartCol = Math.floor((topLeftX - offsetX) / DOT_SPACING);
-    const rawEndCol = Math.floor((bottomRightX - offsetX) / DOT_SPACING);
-
-    const rawStartRow = Math.floor((topLeftY - offsetY) / DOT_SPACING);
-    const rawEndRow = Math.floor((bottomRightY - offsetY) / DOT_SPACING);
-
-    // Clamp to the grid. Without this, a tap near the edge of the grid can
-    // push these past [0, GRID_COLS - 1] / [0, GRID_ROWS - 1], and
-    // LINE_TRIGGERS.value[r] is undefined out there — indexing into
-    // undefined[c] throws inside this worklet (UI thread), which crashes
-    // the whole app instead of showing a JS error.
-    const startCol = Math.max(0, rawStartCol);
-    const endCol = Math.min(GRID_COLS - 1, rawEndCol);
-
-    const startRow = Math.max(0, rawStartRow);
-    const endRow = Math.min(GRID_ROWS - 1, rawEndRow);
+    const startCol = Math.max(
+      0,
+      Math.floor((topLeftX - GRID_OFFSET_X) / DOT_SPACING),
+    );
+    const endCol = Math.min(
+      GRID_COLS - 1,
+      Math.floor((bottomRightX - GRID_OFFSET_X) / DOT_SPACING),
+    );
+    const startRow = Math.max(
+      0,
+      Math.floor((topLeftY - GRID_OFFSET_Y) / DOT_SPACING),
+    );
+    const endRow = Math.min(
+      GRID_ROWS - 1,
+      Math.floor((bottomRightY - GRID_OFFSET_Y) / DOT_SPACING),
+    );
 
     let foundLineId = null;
+
     for (let r = startRow; r <= endRow; r++) {
       for (let c = startCol; c <= endCol; c++) {
-        const dotX = offsetX + c * DOT_SPACING;
-        const dotY = offsetY + r * DOT_SPACING;
+        const dotX = GRID_OFFSET_X + c * DOT_SPACING;
+        const dotY = GRID_OFFSET_Y + r * DOT_SPACING;
 
         if (
           dotX >= topLeftX &&
@@ -317,22 +382,19 @@ export default function AnimatedDashedLines() {
           dotY >= topLeftY &&
           dotY <= bottomRightY
         ) {
-          const lineId = LINE_TRIGGERS.value[r][c];
+          const lineId = grid[r][c];
           if (lineId) {
             onTap.value++;
             foundLineId = lineId;
-            console.log("Tapped lineId:", lineId);
             if (isThrough(lineId)) {
-              console.log("Line is through, clearing lineId:", lineId);
               clearId(lineId);
-              onTap.value++;
-              activeLineId.value = foundLineId;
-              break;
+              launchLine(lineId);
+              return;
             }
           }
-          if (r === endRow && c === endCol) {
-            onTap.value++;
-            activeLineId.value = foundLineId;
+          if (r === endRow && c === endCol && foundLineId) {
+            // Blocked line: still launch it so it visibly bumps and returns.
+            launchLine(foundLineId);
           }
         }
       }
@@ -341,29 +403,18 @@ export default function AnimatedDashedLines() {
 
   const gridPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
-
     const canvas = recorder.beginRecording(
       Skia.XYWHRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT),
     );
-
     const paint = Skia.Paint();
 
-    const radius = 10;
-
-    const cols = Math.ceil(CANVAS_WIDTH / DOT_SPACING);
-    const rows = Math.ceil(CANVAS_HEIGHT / DOT_SPACING);
-
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const x = 40 + c * DOT_SPACING;
-        const y = 40 + r * DOT_SPACING;
-
-        // Milestone 1: color each dot from the photo's mapped grid when one
-        // has been loaded, otherwise fall back to the default dot color.
-        const cellColor = photoGridColors?.[r]?.[c] ?? "#766e6e";
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        const x = GRID_OFFSET_X + c * DOT_SPACING;
+        const y = GRID_OFFSET_Y + r * DOT_SPACING;
+        const cellColor = photoGridColors?.[r]?.[c] ?? DEFAULT_DOT_COLOR;
         paint.setColor(Skia.Color(cellColor));
-
-        canvas.drawCircle(x, y, radius, paint);
+        canvas.drawCircle(x, y, DOT_RADIUS, paint);
       }
     }
 
@@ -382,16 +433,7 @@ export default function AnimatedDashedLines() {
           <View style={styles.contentContainer}>
             <Canvas style={StyleSheet.absoluteFillObject}>
               <Picture picture={gridPicture} />
-
-              {/* {activeLines.map((line) => (
-                <SkiaLine
-                  key={line.id}
-                  id={line.id}
-                  activeLineId={activeLineId}
-                  color={line.color}
-                  points={line.points}
-                />
-              ))} */}
+              <BatchedLines compiled={compiled} />
             </Canvas>
           </View>
         </GestureDetector>
@@ -406,8 +448,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f5f5",
   },
   contentContainer: {
-    width: CANVAS_WIDTH + 2 * 40,
-    height: CANVAS_HEIGHT + 2 * 40,
+    width: CANVAS_WIDTH + 2 * GRID_OFFSET_X,
+    height: CANVAS_HEIGHT + 2 * GRID_OFFSET_Y,
     marginTop: 70,
   },
 });
