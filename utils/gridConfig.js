@@ -3,8 +3,8 @@
 // change to DOT_SPACING in one place silently desynced tap detection from
 // rendering.
 
-export const CANVAS_WIDTH = 200;
-export const CANVAS_HEIGHT = 200;
+export const CANVAS_WIDTH = 2500;
+export const CANVAS_HEIGHT = 2500;
 
 export const DOT_SPACING = 20;
 export const GRID_OFFSET_X = 40;
@@ -29,18 +29,25 @@ export const DEFAULT_DOT_COLOR = "#766e6e";
 // full 2500px canvas. Left at 10 for now so behaviour matches what you already
 // tested.
 export const SPEED = 80;
-export const MAX_PROGRESS = 10;
+export const MAX_PROGRESS = 32; // 32 * 80 = 2560px, clears the full canvas
 export const FORWARD_MS = 1000;
 export const RETURN_MS = 500;
 
 export const FORWARD_RATE = MAX_PROGRESS / FORWARD_MS; // progress units per ms
 
-export const STROKE_WIDTH = 3;
+export const STROKE_WIDTH = 15;
 export const BASE_OPACITY = 0.2;
 
 // Arrowhead triangle, in local space, pointing along +x. Matches the old
 // SVG path "M0 -6 L12 0 L0 6 Z".
 export const ARROW_TRI = [0, -6, 12, 0, 0, 6];
+
+// World extent in Skia coordinates. The Canvas is NO LONGER this size — it is
+// viewport-sized, and this rectangle is mapped into it by a <Group transform>.
+export const WORLD_WIDTH = CANVAS_WIDTH + 2 * GRID_OFFSET_X;
+export const WORLD_HEIGHT = CANVAS_HEIGHT + 2 * GRID_OFFSET_Y;
+
+export const MAX_SCALE = 5;
 
 export const toCanvasX = (col) => GRID_OFFSET_X + col * DOT_SPACING;
 export const toCanvasY = (row) => GRID_OFFSET_Y + row * DOT_SPACING;

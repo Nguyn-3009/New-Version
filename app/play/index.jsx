@@ -1,55 +1,39 @@
-import { View, StyleSheet } from "react-native";
-import { ResumableZoom } from "react-native-zoom-toolkit";
+import { StyleSheet, View } from "react-native";
 import {
   Gesture,
   GestureDetector,
   GestureHandlerRootView,
 } from "react-native-gesture-handler";
-import { useSharedValue, useFrameCallback } from "react-native-reanimated";
-import { Canvas, Picture, Skia } from "@shopify/react-native-skia";
-import { useMemo, useEffect, useRef, useState } from "react";
+import {
+  runOnJS,
+  useDerivedValue,
+  useSharedValue,
+} from "react-native-reanimated";
+import { Canvas, Group, Picture, Skia } from "@shopify/react-native-skia";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
 
 import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
 import { getGridColors, getGeneratedLines } from "../../utils/gridImageStore";
-import BatchedLines from "../../components/BatchedLines";
-import {
-  compileLines,
-  canvasToCell,
-  pointAtLength,
-} from "../../utils/lineBatch";
+import FlightLine from "../../components/FlightLine";
+import { compileLines } from "../../utils/lineBatch";
+import { recordRestingPicture } from "../../utils/restingPicture";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
   DEFAULT_DOT_COLOR,
   DOT_RADIUS,
   DOT_SPACING,
-  FORWARD_RATE,
   GRID_COLS,
   GRID_OFFSET_X,
   GRID_OFFSET_Y,
   GRID_ROWS,
   HITBOX,
-  MAX_PROGRESS,
-  RETURN_MS,
-  SPEED,
+  MAX_SCALE,
+  WORLD_HEIGHT,
+  WORLD_WIDTH,
 } from "../../utils/gridConfig";
-import {
-  COMPILED,
-  LINE_DOTS_MAP,
-  LINE_ESCAPED,
-  LINE_IDLE,
-  LINE_MOVING,
-  LINE_RETURNING,
-  LINE_TRIGGERS,
-  activeList,
-  frameTick,
-  lineState,
-  onTap,
-  progress,
-  returnRate,
-  staticEpoch,
-} from "../../utils/gameShared";
+import { LINE_DOTS_MAP, LINE_TRIGGERS, onTap } from "../../utils/gameShared";
 
 // ---------------------------------------------------------------------------
 // Puzzle loading
@@ -87,12 +71,23 @@ function buildTriggerGrid(lines) {
     Array(GRID_COLS).fill(null),
   );
 
+  let dropped = 0;
   for (const line of lines) {
     for (const { row, col } of expandSegments(line.points)) {
+      // Bounds check: without it, a constant changed three files away turns
+      // into an unrecoverable module-scope crash with a useless message.
+      if (row < 0 || row >= GRID_ROWS || col < 0 || col >= GRID_COLS) {
+        dropped++;
+        continue;
+      }
       grid[row][col] = line.id;
     }
   }
-
+  if (dropped > 0) {
+    console.warn(
+      `buildTriggerGrid: ${dropped} dots outside ${GRID_ROWS}x${GRID_COLS} grid`,
+    );
+  }
   return grid;
 }
 
@@ -107,43 +102,15 @@ function getActiveLinesSnapshot() {
   return getGeneratedLines() ?? STATIC_LINES;
 }
 
-/**
- * Swap in a whole new puzzle. Every shared value below is set with a
- * TOP-LEVEL assignment, which is the only form that synchronises the JS and
- * UI copies — same reasoning as the original buildTriggerGrid comment, now
- * applied to the animation arrays too.
- *
- * After this returns, the UI thread owns progress/lineState/returnRate/
- * activeList outright: JS never touches their contents again until the next
- * load, so per-frame mutation costs nothing.
- */
 function loadPuzzle(lines) {
-  const compiled = compileLines(lines);
-
   LINE_TRIGGERS.value = buildTriggerGrid(lines);
   LINE_DOTS_MAP.value = buildLineDotsMap(lines);
-  COMPILED.value = compiled;
-
-  progress.value = new Array(compiled.count).fill(0);
-  lineState.value = new Array(compiled.count).fill(LINE_IDLE);
-  returnRate.value = new Array(compiled.count).fill(0);
-  activeList.value = [];
-
   onTap.value = 0;
-  staticEpoch.value = staticEpoch.value + 1;
-  frameTick.value = frameTick.value + 1;
-
-  return compiled;
+  return compileLines(lines);
 }
 
-// Load once at module scope, exactly as the old LINE_TRIGGERS/LINE_DOTS_MAP
-// makeMutable calls did — the store can already hold a photo-generated puzzle
-// before this screen first renders.
-const INITIAL_LINES = getActiveLinesSnapshot();
-const INITIAL_COMPILED = loadPuzzle(INITIAL_LINES);
-
 // ---------------------------------------------------------------------------
-// Escape logic (unchanged, just reading from gameShared now)
+// Escape logic
 // ---------------------------------------------------------------------------
 
 function getDirection(dots) {
@@ -168,7 +135,6 @@ function isThrough(lineId) {
     row += dRow;
     col += dCol;
   }
-
   return true;
 }
 
@@ -179,194 +145,209 @@ function clearId(lineId) {
   }
 }
 
-/**
- * Launch one line. Replaces the old dance of bumping `onTap` and having 875
- * useAnimatedReaction hooks each wake up to check `activeLineId.value === id`.
- * Now the tap just writes the two array slots that matter and pushes the
- * index onto the active list.
- */
-function launchLine(lineId) {
-  "worklet";
-  const C = COMPILED.value;
-  if (!C) return;
-
-  const i = C.indexById[lineId];
-  if (i === undefined) return;
-
-  const st = lineState.value;
-  if (st[i] !== LINE_IDLE) return; // already flying, bouncing, or gone
-
-  st[i] = LINE_MOVING;
-  progress.value[i] = 0;
-  activeList.value.push(i);
-
-  // It just left the resting layer, so that layer needs a rebuild.
-  staticEpoch.value = staticEpoch.value + 1;
-}
-
 // ---------------------------------------------------------------------------
 
 export default function AnimatedDashedLines() {
   const { restart, photoReady } = useLocalSearchParams();
 
   const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
-  const [compiled, setCompiled] = useState(INITIAL_COMPILED);
+  const [compiled, setCompiled] = useState(() =>
+    loadPuzzle(getActiveLinesSnapshot()),
+  );
+  const [flights, setFlights] = useState([]);
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
 
-  // Restart rebuilds from whatever lines are CURRENTLY loaded, so it has to
-  // track them independently of render — same reason the old code kept an
-  // activeLinesRef.
-  const activeLinesRef = useRef(INITIAL_LINES);
+  const escapedRef = useRef(new Set());
+  const activeLinesRef = useRef(getActiveLinesSnapshot());
+
+  // -------------------------------------------------------------------------
+  // Camera. World -> screen is:  screen = world * scale + translate
+  // The Skia surface is now viewport-sized; this transform is what brings the
+  // 2580x2580 world into it, instead of allocating a 2580x2580 surface.
+  // -------------------------------------------------------------------------
+  const scale = useSharedValue(1);
+  const tx = useSharedValue(0);
+  const ty = useSharedValue(0);
+
+  const startScale = useSharedValue(1);
+  const startTx = useSharedValue(0);
+  const startTy = useSharedValue(0);
+
+  // Smallest scale that still fits the whole board on screen. Also the floor,
+  // so you can never zoom out into empty space.
+  const minScale = useMemo(() => {
+    if (!viewport.w || !viewport.h) return 1;
+    return Math.min(viewport.w / WORLD_WIDTH, viewport.h / WORLD_HEIGHT);
+  }, [viewport]);
+
+  const onLayout = useCallback((e) => {
+    const { width, height } = e.nativeEvent.layout;
+    setViewport({ w: width, h: height });
+  }, []);
+
+  // Start zoomed out far enough to see the entire board.
+  useEffect(() => {
+    if (!viewport.w || !viewport.h) return;
+    scale.value = minScale;
+    tx.value = (viewport.w - WORLD_WIDTH * minScale) / 2;
+    ty.value = (viewport.h - WORLD_HEIGHT * minScale) / 2;
+  }, [viewport, minScale, scale, tx, ty]);
+
+  const clampCamera = useCallback(
+    (s, x, y) => {
+      "worklet";
+      const sw = WORLD_WIDTH * s;
+      const sh = WORLD_HEIGHT * s;
+      // If the board is smaller than the viewport on an axis, centre it.
+      // Otherwise keep its edges from pulling inside the viewport.
+      const cx =
+        sw <= viewport.w
+          ? (viewport.w - sw) / 2
+          : Math.min(0, Math.max(viewport.w - sw, x));
+      const cy =
+        sh <= viewport.h
+          ? (viewport.h - sh) / 2
+          : Math.min(0, Math.max(viewport.h - sh, y));
+      return { x: cx, y: cy };
+    },
+    [viewport],
+  );
+
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      "worklet";
+      startTx.value = tx.value;
+      startTy.value = ty.value;
+    })
+    .onUpdate((e) => {
+      "worklet";
+      const c = clampCamera(
+        scale.value,
+        startTx.value + e.translationX,
+        startTy.value + e.translationY,
+      );
+      tx.value = c.x;
+      ty.value = c.y;
+    });
+
+  const pinchGesture = Gesture.Pinch()
+    .onStart(() => {
+      "worklet";
+      startScale.value = scale.value;
+      startTx.value = tx.value;
+      startTy.value = ty.value;
+    })
+    .onUpdate((e) => {
+      "worklet";
+      const next = Math.min(
+        MAX_SCALE,
+        Math.max(minScale, startScale.value * e.scale),
+      );
+      // Keep the point under the fingers pinned while scaling.
+      const k = next / startScale.value;
+      const c = clampCamera(
+        next,
+        e.focalX - k * (e.focalX - startTx.value),
+        e.focalY - k * (e.focalY - startTy.value),
+      );
+      scale.value = next;
+      tx.value = c.x;
+      ty.value = c.y;
+    });
+
+  // -------------------------------------------------------------------------
+  // Flight bookkeeping
+  // -------------------------------------------------------------------------
+
+  const reload = useCallback((lines) => {
+    activeLinesRef.current = lines;
+    escapedRef.current = new Set();
+    setFlights([]);
+    setCompiled(loadPuzzle(lines));
+  }, []);
 
   useEffect(() => {
     if (!photoReady) return;
-
     setPhotoGridColors(getGridColors());
-
     const newLines = getGeneratedLines();
     if (!newLines) return;
-
     console.log("🖼️ New photo-generated lines loaded:", newLines.length);
-    activeLinesRef.current = newLines;
-    setCompiled(loadPuzzle(newLines));
-  }, [photoReady]);
+    reload(newLines);
+  }, [photoReady, reload]);
 
   useEffect(() => {
     if (!restart) return;
     console.log("🔄 Full Game Reset Triggered!");
-    setCompiled(loadPuzzle(activeLinesRef.current));
-  }, [restart]);
+    reload(activeLinesRef.current);
+  }, [restart, reload]);
 
-  const scale = useSharedValue(1);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
+  const startFlight = useCallback(
+    (lineId) => {
+      const i = compiled.indexById[lineId];
+      if (i === undefined || escapedRef.current.has(lineId)) return;
+      setFlights((prev) => {
+        if (prev.some((f) => f.id === lineId)) return prev;
+        return [
+          ...prev,
+          {
+            id: lineId,
+            color: compiled.colors[compiled.colorIdx[i]],
+            geom: {
+              flat: compiled.pts[i],
+              cum: compiled.cum[i],
+              total: compiled.total[i],
+              ang: compiled.ang[i],
+            },
+          },
+        ];
+      });
+    },
+    [compiled],
+  );
 
-  const onUpdate = ({ scale: s, translateX: tx, translateY: ty }) => {
-    "worklet";
-    scale.value = s;
-    translateX.value = tx;
-    translateY.value = ty;
-  };
+  const endFlight = useCallback((lineId, escaped) => {
+    if (escaped) escapedRef.current.add(lineId);
+    setFlights((prev) => prev.filter((f) => f.id !== lineId));
+  }, []);
 
   // -------------------------------------------------------------------------
-  // The single animation driver.
-  //
-  // This replaces every per-line withTiming + useAnimatedReaction +
-  // useDerivedValue collision check. One callback, walking only the arrows
-  // that are actually in flight. When activeList empties it early-returns
-  // without touching frameTick, so an idle board triggers zero path rebuilds.
+  // Tap. e.x / e.y now arrive in SCREEN space, because the view is no longer
+  // the size of the world. Invert the camera to get back to world space.
   // -------------------------------------------------------------------------
-  useFrameCallback((frameInfo) => {
-    "worklet";
-    const dt = frameInfo.timeSincePreviousFrame;
-    if (dt == null) return;
-
-    const act = activeList.value;
-    if (!act || act.length === 0) return;
-
-    const C = COMPILED.value;
-    const grid = LINE_TRIGGERS.value;
-    if (!C || !grid) return;
-
-    const prog = progress.value;
-    const st = lineState.value;
-    const rate = returnRate.value;
-
-    const scratchPt = { x: 0, y: 0 };
-    const scratchCell = { row: 0, col: 0 };
-
-    let restingChanged = false;
-
-    // Reverse iteration so splicing finished arrows out doesn't skip entries.
-    for (let k = act.length - 1; k >= 0; k--) {
-      const i = act[k];
-
-      if (st[i] === LINE_MOVING) {
-        prog[i] += dt * FORWARD_RATE;
-
-        // Collision: where is the arrowhead, and does that cell belong to
-        // someone else? Same check the old per-line useDerivedValue did.
-        const headLen = prog[i] * SPEED + C.total[i];
-        const h = pointAtLength(
-          C.pts[i],
-          C.cum[i],
-          C.total[i],
-          C.ang[i],
-          headLen,
-          scratchPt,
-        );
-        canvasToCell(h.x, h.y, scratchCell);
-
-        let hit = null;
-        if (
-          scratchCell.row >= 0 &&
-          scratchCell.row < grid.length &&
-          scratchCell.col >= 0 &&
-          scratchCell.col < grid[0].length
-        ) {
-          hit = grid[scratchCell.row][scratchCell.col];
-        }
-
-        if (hit && hit !== C.ids[i]) {
-          // Blocked. Bounce back over RETURN_MS from wherever we got to.
-          st[i] = LINE_RETURNING;
-          rate[i] = prog[i] / RETURN_MS;
-        } else if (prog[i] >= MAX_PROGRESS) {
-          prog[i] = MAX_PROGRESS;
-          st[i] = LINE_ESCAPED;
-          act.splice(k, 1);
-          restingChanged = true;
-        }
-      } else if (st[i] === LINE_RETURNING) {
-        prog[i] -= dt * rate[i];
-        if (prog[i] <= 0) {
-          prog[i] = 0;
-          st[i] = LINE_IDLE;
-          act.splice(k, 1);
-          restingChanged = true;
-        }
-      } else {
-        act.splice(k, 1);
-        restingChanged = true;
-      }
-    }
-
-    if (restingChanged) staticEpoch.value = staticEpoch.value + 1;
-
-    // One bump per frame drives every active-layer path rebuild at once.
-    frameTick.value = frameTick.value + 1;
-  });
-
   const tapGesture = Gesture.Tap().onEnd((e) => {
     "worklet";
 
     const grid = LINE_TRIGGERS.value;
     if (!grid) return;
 
-    const canvasX = e.x;
-    const canvasY = e.y;
+    const s = scale.value;
+    const worldX = (e.x - tx.value) / s;
+    const worldY = (e.y - ty.value) / s;
 
-    const half = HITBOX / 2;
+    // Hitbox is a fixed size on screen, so it grows in world units as you
+    // zoom out — the same behaviour the old `half / scale` gave you.
+    const half = HITBOX / 2 / s;
 
-    const topLeftX = canvasX - half / scale.value;
-    const topLeftY = canvasY - half / scale.value;
-    const bottomRightX = canvasX + half / scale.value;
-    const bottomRightY = canvasY + half / scale.value;
+    const left = worldX - half;
+    const top = worldY - half;
+    const right = worldX + half;
+    const bottom = worldY + half;
 
     const startCol = Math.max(
       0,
-      Math.floor((topLeftX - GRID_OFFSET_X) / DOT_SPACING),
+      Math.floor((left - GRID_OFFSET_X) / DOT_SPACING),
     );
     const endCol = Math.min(
       GRID_COLS - 1,
-      Math.floor((bottomRightX - GRID_OFFSET_X) / DOT_SPACING),
+      Math.floor((right - GRID_OFFSET_X) / DOT_SPACING),
     );
     const startRow = Math.max(
       0,
-      Math.floor((topLeftY - GRID_OFFSET_Y) / DOT_SPACING),
+      Math.floor((top - GRID_OFFSET_Y) / DOT_SPACING),
     );
     const endRow = Math.min(
       GRID_ROWS - 1,
-      Math.floor((bottomRightY - GRID_OFFSET_Y) / DOT_SPACING),
+      Math.floor((bottom - GRID_OFFSET_Y) / DOT_SPACING),
     );
 
     let foundLineId = null;
@@ -376,80 +357,99 @@ export default function AnimatedDashedLines() {
         const dotX = GRID_OFFSET_X + c * DOT_SPACING;
         const dotY = GRID_OFFSET_Y + r * DOT_SPACING;
 
-        if (
-          dotX >= topLeftX &&
-          dotX <= bottomRightX &&
-          dotY >= topLeftY &&
-          dotY <= bottomRightY
-        ) {
+        if (dotX >= left && dotX <= right && dotY >= top && dotY <= bottom) {
           const lineId = grid[r][c];
           if (lineId) {
             onTap.value++;
             foundLineId = lineId;
             if (isThrough(lineId)) {
               clearId(lineId);
-              launchLine(lineId);
+              runOnJS(startFlight)(lineId);
               return;
             }
           }
           if (r === endRow && c === endCol && foundLineId) {
-            // Blocked line: still launch it so it visibly bumps and returns.
-            launchLine(foundLineId);
+            runOnJS(startFlight)(foundLineId);
           }
         }
       }
     }
   });
 
+  // A drag must not also register as a tap, so Tap races the other two.
+  const gesture = Gesture.Race(
+    tapGesture,
+    Gesture.Simultaneous(panGesture, pinchGesture),
+  );
+
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
+
+  const restingPicture = useMemo(() => {
+    const flying = new Set(flights.map((f) => f.id));
+    return recordRestingPicture(compiled, flying, escapedRef.current);
+  }, [compiled, flights]);
+
   const gridPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
     const canvas = recorder.beginRecording(
-      Skia.XYWHRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT),
+      Skia.XYWHRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT),
     );
     const paint = Skia.Paint();
+    paint.setAntiAlias(true);
 
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
-        const x = GRID_OFFSET_X + c * DOT_SPACING;
-        const y = GRID_OFFSET_Y + r * DOT_SPACING;
-        const cellColor = photoGridColors?.[r]?.[c] ?? DEFAULT_DOT_COLOR;
-        paint.setColor(Skia.Color(cellColor));
-        canvas.drawCircle(x, y, DOT_RADIUS, paint);
+        paint.setColor(
+          Skia.Color(photoGridColors?.[r]?.[c] ?? DEFAULT_DOT_COLOR),
+        );
+        canvas.drawCircle(
+          GRID_OFFSET_X + c * DOT_SPACING,
+          GRID_OFFSET_Y + r * DOT_SPACING,
+          DOT_RADIUS,
+          paint,
+        );
       }
     }
-
     return recorder.finishRecordingAsPicture();
   }, [photoGridColors]);
 
+  const cameraTransform = useDerivedValue(() => [
+    { translateX: tx.value },
+    { translateY: ty.value },
+    { scale: scale.value },
+  ]);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ResumableZoom
-        style={styles.mapContainer}
-        maxScale={5}
-        minScale={1}
-        onUpdate={onUpdate}
-      >
-        <GestureDetector gesture={tapGesture}>
-          <View style={styles.contentContainer}>
-            <Canvas style={StyleSheet.absoluteFillObject}>
-              <Picture picture={gridPicture} />
-              <BatchedLines compiled={compiled} />
-            </Canvas>
-          </View>
-        </GestureDetector>
-      </ResumableZoom>
+      <GestureDetector gesture={gesture}>
+        <View style={styles.viewport} onLayout={onLayout}>
+          <Canvas style={StyleSheet.absoluteFillObject}>
+            <Group transform={cameraTransform}>
+{/*               <Picture picture={gridPicture} /> */}
+              <Picture picture={restingPicture} />
+              {flights.map((f) => (
+                <FlightLine
+                  key={f.id}
+                  id={f.id}
+                  geom={f.geom}
+                  color={f.color}
+                  onDone={endFlight}
+                />
+              ))}
+            </Group>
+          </Canvas>
+        </View>
+      </GestureDetector>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  mapContainer: {
+  viewport: {
     flex: 1,
+    marginTop: 90,
     backgroundColor: "#f5f5f5",
-  },
-  contentContainer: {
-    width: 900,
-    height: 900,
-    marginTop: 70,
   },
 });
