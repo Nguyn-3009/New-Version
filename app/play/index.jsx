@@ -427,7 +427,7 @@ export default function AnimatedDashedLines() {
         <View style={styles.viewport} onLayout={onLayout}>
           <Canvas style={StyleSheet.absoluteFillObject}>
             <Group transform={cameraTransform}>
-{/*               <Picture picture={gridPicture} /> */}
+              {/*               <Picture picture={gridPicture} /> */}
               <Picture picture={restingPicture} />
               {flights.map((f) => (
                 <FlightLine

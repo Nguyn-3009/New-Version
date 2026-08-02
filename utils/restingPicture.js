@@ -43,11 +43,11 @@ export function recordRestingPicture(compiled, flyingIds, escapedIds) {
   const K = compiled.colors.length;
 
   // One path per colour per role, so the whole board is 3 * K draw calls.
-  const basePaths = [];
+  // const basePaths = [];
   const bodyPaths = [];
   const headPaths = [];
   for (let k = 0; k < K; k++) {
-    basePaths.push(Skia.Path.Make());
+    // basePaths.push(Skia.Path.Make());
     bodyPaths.push(Skia.Path.Make());
     headPaths.push(Skia.Path.Make());
   }
@@ -59,9 +59,9 @@ export function recordRestingPicture(compiled, flyingIds, escapedIds) {
 
     // Ghost: drawn for every line, always, so a departed arrow leaves its
     // track behind exactly like the old 0.2-opacity base <Path> did.
-    const base = basePaths[k];
-    base.moveTo(flat[0], flat[1]);
-    for (let j = 1; j < n; j++) base.lineTo(flat[j * 2], flat[j * 2 + 1]);
+    // const base = basePaths[k];
+    // base.moveTo(flat[0], flat[1]);
+    // for (let j = 1; j < n; j++) base.lineTo(flat[j * 2], flat[j * 2 + 1]);
 
     const id = compiled.ids[i];
     if (flyingIds.has(id) || escapedIds.has(id)) continue;
@@ -82,13 +82,13 @@ export function recordRestingPicture(compiled, flyingIds, escapedIds) {
   for (let k = 0; k < K; k++) {
     const color = Skia.Color(compiled.colors[k]);
 
-    const ghost = Skia.Paint();
-    ghost.setColor(color);
-    ghost.setAlphaf(BASE_OPACITY);
-    ghost.setStyle(1); // stroke
-    ghost.setStrokeWidth(STROKE_WIDTH);
-    ghost.setAntiAlias(true);
-    canvas.drawPath(basePaths[k], ghost);
+    // const ghost = Skia.Paint();
+    // ghost.setColor(color);
+    // ghost.setAlphaf(BASE_OPACITY);
+    // ghost.setStyle(1); // stroke
+    // ghost.setStrokeWidth(STROKE_WIDTH);
+    // ghost.setAntiAlias(true);
+    // canvas.drawPath(basePaths[k], ghost);
 
     const stroke = Skia.Paint();
     stroke.setColor(color);
