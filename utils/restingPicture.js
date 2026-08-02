@@ -70,6 +70,9 @@ export function recordRestingPicture(compiled, flyingIds, escapedIds) {
     const body = bodyPaths[k];
     body.moveTo(flat[0], flat[1]);
     for (let j = 1; j < n; j++) body.lineTo(flat[j * 2], flat[j * 2 + 1]);
+    // A 1-cell arrow is a single point: a bare moveTo draws nothing, so give
+    // it a zero-length segment, which a round cap renders as a dot.
+    if (n === 1) body.lineTo(flat[0], flat[1]);
 
     appendHead(
       headPaths[k],
@@ -94,6 +97,8 @@ export function recordRestingPicture(compiled, flyingIds, escapedIds) {
     stroke.setColor(color);
     stroke.setStyle(1); // stroke
     stroke.setStrokeWidth(STROKE_WIDTH);
+    stroke.setStrokeCap(1); // round - also makes 1-cell arrows visible
+    stroke.setStrokeJoin(1); // round
     stroke.setAntiAlias(true);
     canvas.drawPath(bodyPaths[k], stroke);
 

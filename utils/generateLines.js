@@ -28,9 +28,13 @@
  *     to earlier-built ones, which is acyclic by construction.
  *   RULE 3 (one color per arrow): the body/tail search never leaves the
  *     head's cluster.
- *   RULE 4 (>= 2 cells per arrow): a free cell with zero free neighbors
- *     can never be picked up by any arrow, so it's marked blank instead of
- *     forming a 1-cell "line".
+ *   RULE 4 (REMOVED): a free cell with zero free same-cluster neighbors used
+ *     to be marked blank, which was the ONLY significant source of blank
+ *     cells (~3.7% of the grid; escape rays contribute ~0 because they stop
+ *     at the first already-decided cell). Such a cell now becomes a valid
+ *     1-cell arrow instead, so the rendered image has no holes. A 1-cell
+ *     arrow still obeys every other rule: it is a place-head, it points
+ *     outward, and its escape ray is reserved exactly as before.
  *
  * Output shape: [{ id, color, points: [{row,col}, ...] }, ...] where
  * `points` only contains the *turning* points (start, corners, end) -
@@ -94,7 +98,29 @@ export function generateLinesData(labelGrid, palette) {
     const fd = freeDirs(r, c);
     const k = fd.length;
 
-    if (k === 0) return { kind: "isolated" };
+    if (k === 0) {
+      // No same-cluster neighbours: this is a 1-cell arrow. Every direction
+      // is "blocked", so any of them is a legal pointing direction. Pick the
+      // one whose escape ray would blank the fewest still-free cells, which
+      // keeps the knock-on blanking to a minimum.
+      let best = DIRECTIONS[0];
+      let bestCost = Infinity;
+      for (const d of DIRECTIONS) {
+        let cost = 0;
+        let rr = r + d.dr;
+        let cc = c + d.dc;
+        while (inBounds(rr, cc) && isFree(rr, cc)) {
+          cost++;
+          rr += d.dr;
+          cc += d.dc;
+        }
+        if (cost < bestCost) {
+          bestCost = cost;
+          best = d;
+        }
+      }
+      return { kind: "single", pointing: best };
+    }
     if (k === 4) return { kind: "interior" };
     if (k === 2 && OPPOSITE[fd[0].name] === fd[1].name) return { kind: "corridor" };
 
@@ -197,10 +223,6 @@ export function generateLinesData(labelGrid, palette) {
     if (!isFree(r, c)) continue;
 
     const info = candidateInfo(r, c);
-    if (info.kind === "isolated") {
-      markBlank(r, c);
-      continue;
-    }
     if (info.kind === "interior" || info.kind === "corridor") {
       continue; // wait for a neighbor to resolve first
     }
@@ -208,16 +230,21 @@ export function generateLinesData(labelGrid, palette) {
     // info.kind === "head"
     const label = labelOf(r, c);
     const pointing = info.pointing;
-    const backName = OPPOSITE[pointing.name];
-    const back = DIRECTIONS.find((d) => d.name === backName);
+    const back = DIRECTIONS.find((d) => d.name === OPPOSITE[pointing.name]);
     const ddp = { row: r + back.dr, col: c + back.dc }; // direction-define point
 
     const head = { row: r, col: c };
+    // A 1-cell arrow has no body at all - the head IS the whole line.
     // bfsFarthestSameLabel returns [ddp, ..., tail] (start -> farthest); we
     // need the body to run tail -> ... -> ddp so `head` lands immediately
     // after ddp (its only adjacent cell), not after the far-away tail.
-    const bodyPath = bfsFarthestSameLabel(ddp, label, keyOf(head.row, head.col)).reverse();
-    const fullPath = [...bodyPath, head]; // tail ... ddp, head
+    const fullPath =
+      info.kind === "single"
+        ? [head]
+        : [
+          ...bfsFarthestSameLabel(ddp, label, keyOf(head.row, head.col)).reverse(),
+          head,
+        ];
 
     lineCounter += 1;
     const id = `line${lineCounter}`;
@@ -241,6 +268,10 @@ export function generateLinesData(labelGrid, palette) {
       id,
       color: paletteToColor(palette[label]),
       points: compressToTurns(fullPath),
+      // Explicit escape direction. Consumers used to derive this from the
+      // last two points, which is impossible for a 1-cell arrow - and is
+      // redundant work for every other arrow anyway.
+      dir: { dr: pointing.dr, dc: pointing.dc },
     });
   }
 

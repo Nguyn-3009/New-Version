@@ -20,5 +20,10 @@ export const LINE_TRIGGERS = makeMutable(null);
 // line id -> expanded dot list, for isThrough/clearId.
 export const LINE_DOTS_MAP = makeMutable(null);
 
+// line id -> {dr, dc}. Escape direction is now carried explicitly by
+// generateLines rather than derived from the last two points, because a
+// 1-cell arrow has no "last two points" to derive it from.
+export const LINE_DIRS = makeMutable(null);
+
 // Debug counter only; nothing reacts to it.
 export const onTap = makeMutable(0);

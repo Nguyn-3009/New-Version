@@ -79,15 +79,20 @@ export function compileLines(lines) {
     cum[i] = c;
     total[i] = len;
 
-    // Exit direction: the heading of the final segment, which is the direction
-    // the arrow flies once it runs off the end of its own polyline.
-    ang[i] =
-      n >= 2
-        ? Math.atan2(
-          flat[(n - 1) * 2 + 1] - flat[(n - 2) * 2 + 1],
-          flat[(n - 1) * 2] - flat[(n - 2) * 2],
-        )
-        : 0;
+    // Exit direction. Prefer the explicit escape direction emitted by
+    // generateLines: a 1-cell arrow has only one point, so there is no "last
+    // segment" to derive a heading from. The fallback keeps older/static line
+    // data working unchanged.
+    if (line.dir) {
+      ang[i] = Math.atan2(line.dir.dr, line.dir.dc);
+    } else if (n >= 2) {
+      ang[i] = Math.atan2(
+        flat[(n - 1) * 2 + 1] - flat[(n - 2) * 2 + 1],
+        flat[(n - 1) * 2] - flat[(n - 2) * 2],
+      );
+    } else {
+      ang[i] = 0;
+    }
   }
 
   const byColor = colors.map(() => []);

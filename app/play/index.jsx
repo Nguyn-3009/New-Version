@@ -33,7 +33,12 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH,
 } from "../../utils/gridConfig";
-import { LINE_DOTS_MAP, LINE_TRIGGERS, onTap } from "../../utils/gameShared";
+import {
+  LINE_DIRS,
+  LINE_DOTS_MAP,
+  LINE_TRIGGERS,
+  onTap,
+} from "../../utils/gameShared";
 
 // ---------------------------------------------------------------------------
 // Puzzle loading
@@ -41,6 +46,13 @@ import { LINE_DOTS_MAP, LINE_TRIGGERS, onTap } from "../../utils/gameShared";
 
 function expandSegments(points) {
   const allDots = [];
+
+  // A 1-cell arrow has a single point and therefore no segments. Without this
+  // it would expand to [] and never be registered in the trigger grid, i.e.
+  // it would be invisible to taps.
+  if (points.length === 1) {
+    return [{ row: points[0].row, col: points[0].col }];
+  }
 
   for (let i = 0; i < points.length - 1; i++) {
     const from = points[i];
@@ -98,6 +110,23 @@ function buildLineDotsMap(lines) {
   }, {});
 }
 
+function buildLineDirs(lines) {
+  return lines.reduce((acc, line) => {
+    if (line.dir) {
+      acc[line.id] = line.dir;
+    } else {
+      // Fallback for static/legacy line data without an explicit direction.
+      const p = line.points;
+      const last = p[p.length - 1];
+      const prev = p[p.length - 2] ?? last;
+      const dr = Math.sign(last.row - prev.row);
+      const dc = Math.sign(last.col - prev.col);
+      acc[line.id] = { dr, dc };
+    }
+    return acc;
+  }, {});
+}
+
 function getActiveLinesSnapshot() {
   return getGeneratedLines() ?? STATIC_LINES;
 }
@@ -105,6 +134,7 @@ function getActiveLinesSnapshot() {
 function loadPuzzle(lines) {
   LINE_TRIGGERS.value = buildTriggerGrid(lines);
   LINE_DOTS_MAP.value = buildLineDotsMap(lines);
+  LINE_DIRS.value = buildLineDirs(lines);
   onTap.value = 0;
   return compileLines(lines);
 }
@@ -113,18 +143,15 @@ function loadPuzzle(lines) {
 // Escape logic
 // ---------------------------------------------------------------------------
 
-function getDirection(dots) {
-  "worklet";
-  const last = dots[dots.length - 1];
-  const prev = dots[dots.length - 2];
-  return { dRow: last.row - prev.row, dCol: last.col - prev.col };
-}
-
 function isThrough(lineId) {
   "worklet";
   const dots = LINE_DOTS_MAP.value[lineId];
   const last = dots[dots.length - 1];
-  const { dRow, dCol } = getDirection(dots);
+  // Direction now comes from the line data, not from the last two dots -
+  // a 1-cell arrow has only one dot.
+  const d = LINE_DIRS.value[lineId];
+  const dRow = d.dr;
+  const dCol = d.dc;
 
   let row = last.row + dRow;
   let col = last.col + dCol;

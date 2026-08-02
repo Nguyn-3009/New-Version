@@ -44,7 +44,7 @@ export const BASE_OPACITY = 0.2;
 
 // Arrowhead triangle, in local space, pointing along +x. Matches the old
 // SVG path "M0 -6 L12 0 L0 6 Z".
-export const ARROW_TRI = [0, -11, 22, 0, 0, 11]; // scaled with STROKE_WIDTH
+export const ARROW_TRI = [0, -11, 11, 0, 0, 11]; // scaled with STROKE_WIDTH
 
 // World extent in Skia coordinates. The Canvas is NO LONGER this size — it is
 // viewport-sized, and this rectangle is mapped into it by a <Group transform>.
