@@ -36,12 +36,15 @@ export default function PhotoScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: "images",
-      quality: 1,
-    });
-
-    handlePickerResult(result);
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: "images",
+        quality: 1,
+      });
+      handlePickerResult(result);
+    } catch (e) {
+      reportPickFailure(e);
+    }
   }
 
   async function pickFromLibrary() {
@@ -54,12 +57,40 @@ export default function PhotoScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: "images",
-      quality: 1,
-    });
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: "images",
+        quality: 1,
+      });
+      handlePickerResult(result);
+    } catch (e) {
+      reportPickFailure(e);
+    }
+  }
 
-    handlePickerResult(result);
+  /**
+   * The picker rejects when iOS can't materialise the original file - almost
+   * always because the photo lives in iCloud and isn't downloaded to the
+   * device. The error names whatever format the asset happens to be
+   * ("Cannot load representation of type public.heic"), which makes it look
+   * like a format problem. It isn't.
+   *
+   * This was previously uncaught, which is worse than it sounds: the pick
+   * silently failed, `previewUri` stayed on the PREVIOUS photo, and tapping
+   * "Use This Photo" regenerated the OLD image - indistinguishable from a
+   * stale-puzzle bug.
+   */
+  function reportPickFailure(e) {
+    const msg = String(e?.message ?? e);
+    console.warn("[picker] failed:", msg);
+
+    const isRepresentation = /representation|Failed to read/i.test(msg);
+    Alert.alert(
+      "Couldn't load that photo",
+      isRepresentation
+        ? "This photo may still be stored in iCloud. Open it in the Photos app so it downloads to your device, then try again."
+        : "Something went wrong reading that photo. Try a different one.",
+    );
   }
 
   function handlePickerResult(result) {

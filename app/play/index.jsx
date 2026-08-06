@@ -9,7 +9,13 @@ import {
   useDerivedValue,
   useSharedValue,
 } from "react-native-reanimated";
-import { Canvas, Group, Picture, Skia } from "@shopify/react-native-skia";
+import {
+  Canvas,
+  Group,
+  Image as SkiaImage,
+  Picture,
+  Skia,
+} from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 
@@ -34,6 +40,7 @@ import {
   GRID_ROWS,
   HITBOX,
   MAX_SCALE,
+  SNAPSHOT_SIZE,
   WORLD_HEIGHT,
   WORLD_WIDTH,
 } from "../../utils/gridConfig";
@@ -187,9 +194,44 @@ export default function AnimatedDashedLines() {
     loadPuzzle(getActiveLinesSnapshot()),
   );
   const [flights, setFlights] = useState([]);
+
+  // The resting Picture is re-recorded from `restingTick`, NOT directly from
+  // `flights`. Several arrows landing within a few frames of each other would
+  // otherwise trigger one full re-record each - and a re-record now walks
+  // ~11k turn points. Coalescing them into a single deferred record is what
+  // removes the stutter when a tap cascades into multiple escapes.
+  const [restingTick, setRestingTick] = useState(0);
+  const flightsRef = useRef([]);
+  const pendingRecordRef = useRef(null);
+
+  // True only while a pan/pinch is in progress. During a gesture we draw a
+  // pre-rasterised snapshot instead of the live Picture: scaling a texture is
+  // a GPU blit, whereas Skia re-tessellates stroked geometry at every new
+  // scale. That tessellation is the zoom hitch.
+  const [gesturing, setGesturing] = useState(false);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
 
   const escapedRef = useRef(new Set());
+
+  const scheduleRestingRecord = useCallback(() => {
+    if (pendingRecordRef.current) return; // one record per burst
+    pendingRecordRef.current = setTimeout(() => {
+      pendingRecordRef.current = null;
+      setRestingTick((t) => t + 1);
+    }, 50);
+  }, []);
+
+  useEffect(() => {
+    flightsRef.current = flights;
+    scheduleRestingRecord();
+  }, [flights, scheduleRestingRecord]);
+
+  useEffect(
+    () => () => {
+      if (pendingRecordRef.current) clearTimeout(pendingRecordRef.current);
+    },
+    [],
+  );
   const activeLinesRef = useRef(getActiveLinesSnapshot());
 
   // -------------------------------------------------------------------------
@@ -246,6 +288,14 @@ export default function AnimatedDashedLines() {
   );
 
   const panGesture = Gesture.Pan()
+    .onBegin(() => {
+      "worklet";
+      runOnJS(setGesturing)(true);
+    })
+    .onFinalize(() => {
+      "worklet";
+      runOnJS(setGesturing)(false);
+    })
     .onStart(() => {
       "worklet";
       startTx.value = tx.value;
@@ -263,6 +313,14 @@ export default function AnimatedDashedLines() {
     });
 
   const pinchGesture = Gesture.Pinch()
+    .onBegin(() => {
+      "worklet";
+      runOnJS(setGesturing)(true);
+    })
+    .onFinalize(() => {
+      "worklet";
+      runOnJS(setGesturing)(false);
+    })
     .onStart(() => {
       "worklet";
       startScale.value = scale.value;
@@ -431,9 +489,34 @@ export default function AnimatedDashedLines() {
   // -------------------------------------------------------------------------
 
   const restingPicture = useMemo(() => {
-    const flying = new Set(flights.map((f) => f.id));
+    const flying = new Set(flightsRef.current.map((f) => f.id));
     return recordRestingPicture(compiled, flying, escapedRef.current);
-  }, [compiled, flights]);
+    // restingTick is the dependency on purpose - see scheduleRestingRecord.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compiled, restingTick]);
+
+  // Pre-rasterised copy of the resting board, drawn only during gestures.
+  //
+  // Deliberately rendered at SNAPSHOT_SIZE rather than full world resolution:
+  // a 2580x2580 @3x surface is the ~228 MB allocation that used to kill the
+  // app. This one is a fixed ~7.8 MB regardless of zoom level.
+  const restingImage = useMemo(() => {
+    try {
+      const surface = Skia.Surface.MakeOffscreen(SNAPSHOT_SIZE, SNAPSHOT_SIZE);
+      if (!surface) return null;
+      const c = surface.getCanvas();
+      const s = SNAPSHOT_SIZE / WORLD_WIDTH;
+      c.scale(s, s);
+      c.drawPicture(restingPicture);
+      surface.flush();
+      return surface.makeImageSnapshot();
+    } catch (e) {
+      // Offscreen surfaces aren't available everywhere; fall back to drawing
+      // the live Picture during gestures too.
+      console.warn("[render] snapshot failed:", e?.message);
+      return null;
+    }
+  }, [restingPicture]);
 
   const gridPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
@@ -472,7 +555,18 @@ export default function AnimatedDashedLines() {
           <Canvas style={StyleSheet.absoluteFillObject}>
             <Group transform={cameraTransform}>
               {/*               <Picture picture={gridPicture} /> */}
-              <Picture picture={restingPicture} />
+              {gesturing && restingImage ? (
+                <SkiaImage
+                  image={restingImage}
+                  x={0}
+                  y={0}
+                  width={WORLD_WIDTH}
+                  height={WORLD_HEIGHT}
+                  fit="fill"
+                />
+              ) : (
+                <Picture picture={restingPicture} />
+              )}
               {flights.map((f) => (
                 <FlightLine
                   key={f.id}

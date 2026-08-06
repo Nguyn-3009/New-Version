@@ -53,6 +53,12 @@ export const WORLD_HEIGHT = CANVAS_HEIGHT + 2 * GRID_OFFSET_Y;
 
 export const MAX_SCALE = 5;
 
+// Resolution of the pre-rasterised resting board drawn during pan/pinch.
+// 1400^2 x 4 bytes = ~7.8 MB, fixed, versus the ~228 MB a full-resolution
+// world surface would need. Softer than the live Picture at maximum zoom,
+// which is an acceptable trade for the duration of a gesture.
+export const SNAPSHOT_SIZE = 1400;
+
 // --- Collision sweep --------------------------------------------------------
 // The arrowhead advances MAX_PROGRESS*SPEED/60 px per frame = ~2.1 cells at
 // current tuning. Sampling only the head's endpoint therefore steps OVER
