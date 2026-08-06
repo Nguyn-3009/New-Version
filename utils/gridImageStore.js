@@ -40,7 +40,24 @@ export function getGridPalette() {
 // generateLinesData()'s output - the actual gameplay LINES data for
 // play/index.jsx to build its trigger grid from, replacing the static
 // LINE_TRIGGER.js data for a photo-generated puzzle.
+// Bumped every time a new puzzle is stored. The play screen compares this
+// against what it last rendered, so "is there a new puzzle?" is answered by
+// the store itself rather than by a router param.
+//
+// The old design sent the DATA through this store and the SIGNAL through
+// router params (photoReady: Date.now()). Two channels with different
+// lifetimes: if the play screen was already mounted and the param didn't
+// re-propagate through the nested Stack, you got a fresh puzzle in the store
+// and a stale one on screen - and Restart appeared to "fix" it, because
+// Restart reloads straight from the store.
+let puzzleVersion = 0;
+
+export function getPuzzleVersion() {
+  return puzzleVersion;
+}
+
 export function setGeneratedLines(lines, blanks) {
+  puzzleVersion += 1;
   generatedLines = lines;
   generatedBlanks = blanks;
 }

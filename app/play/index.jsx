@@ -11,10 +11,14 @@ import {
 } from "react-native-reanimated";
 import { Canvas, Group, Picture, Skia } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocalSearchParams } from "expo-router";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
-import { getGridColors, getGeneratedLines } from "../../utils/gridImageStore";
+import {
+  getGridColors,
+  getGeneratedLines,
+  getPuzzleVersion,
+} from "../../utils/gridImageStore";
 import FlightLine from "../../components/FlightLine";
 import { compileLines } from "../../utils/lineBatch";
 import { recordRestingPicture } from "../../utils/restingPicture";
@@ -175,7 +179,8 @@ function clearId(lineId) {
 // ---------------------------------------------------------------------------
 
 export default function AnimatedDashedLines() {
-  const { restart, photoReady } = useLocalSearchParams();
+  // photoReady is no longer read - the store version drives puzzle reloads.
+  const { restart } = useLocalSearchParams();
 
   const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
   const [compiled, setCompiled] = useState(() =>
@@ -293,14 +298,26 @@ export default function AnimatedDashedLines() {
     setCompiled(loadPuzzle(lines));
   }, []);
 
-  useEffect(() => {
-    if (!photoReady) return;
-    setPhotoGridColors(getGridColors());
-    const newLines = getGeneratedLines();
-    if (!newLines) return;
-    console.log("🖼️ New photo-generated lines loaded:", newLines.length);
-    reload(newLines);
-  }, [photoReady, reload]);
+  // Which puzzle version is currently on screen. Compared against the store
+  // every time this screen gains focus, so a new puzzle can never sit in the
+  // store while a stale one is rendered - regardless of how you navigated
+  // here, and regardless of whether this screen stayed mounted.
+  const shownVersionRef = useRef(-1);
+
+  useFocusEffect(
+    useCallback(() => {
+      const version = getPuzzleVersion();
+      if (version === shownVersionRef.current) return;
+
+      const newLines = getGeneratedLines();
+      if (!newLines) return;
+
+      shownVersionRef.current = version;
+      setPhotoGridColors(getGridColors());
+      console.log("🖼️ New photo-generated lines loaded:", newLines.length);
+      reload(newLines);
+    }, [reload]),
+  );
 
   useEffect(() => {
     if (!restart) return;

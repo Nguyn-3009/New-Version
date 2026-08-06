@@ -41,6 +41,16 @@
  * exactly what play/index.jsx's `expandSegments` already expects.
  */
 
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 const DIRECTIONS = [
   { name: "up", dr: -1, dc: 0 },
   { name: "down", dr: 1, dc: 0 },
@@ -67,7 +77,12 @@ function paletteToColor(rgb) {
  *   blanks: {row:number,col:number}[],
  * }}
  */
-export function generateLinesData(labelGrid, palette) {
+export function generateLinesData(
+  labelGrid,
+  palette,
+  { seed = 1337, minBodyLength = 1, maxBodyLength = 375 } = {},
+) {
+  const rng = mulberry32(seed);
   const rows = labelGrid.length;
   const cols = rows > 0 ? labelGrid[0].length : 0;
 
@@ -131,6 +146,35 @@ export function generateLinesData(labelGrid, palette) {
     if (!pointing) return { kind: "corridor" }; // defensive; shouldn't happen for k in {1,2-corner,3}
 
     return { kind: "head", pointing };
+  }
+
+
+  function randomWalkBody(start, label, excludeKey) {
+    const target =
+      minBodyLength + Math.floor(rng() * (maxBodyLength - minBodyLength + 1));
+
+    const visited = new Set([excludeKey, keyOf(start.row, start.col)]);
+    const path = [start];
+    let cur = start;
+
+    while (path.length < target) {
+      const options = [];
+      for (const d of DIRECTIONS) {
+        const nr = cur.row + d.dr;
+        const nc = cur.col + d.dc;
+        if (!isFreeSameLabel(nr, nc, label)) continue;
+        if (visited.has(keyOf(nr, nc))) continue;
+        options.push({ row: nr, col: nc });
+      }
+      if (options.length === 0) break;
+
+      const next = options[Math.floor(rng() * options.length)];
+      visited.add(keyOf(next.row, next.col));
+      path.push(next);
+      cur = next;
+    }
+
+    return path;
   }
 
   function bfsFarthestSameLabel(start, label, excludeKey) {
@@ -241,10 +285,7 @@ export function generateLinesData(labelGrid, palette) {
     const fullPath =
       info.kind === "single"
         ? [head]
-        : [
-          ...bfsFarthestSameLabel(ddp, label, keyOf(head.row, head.col)).reverse(),
-          head,
-        ];
+        : [...randomWalkBody(ddp, label, keyOf(head.row, head.col)).reverse(), head];
 
     lineCounter += 1;
     const id = `line${lineCounter}`;

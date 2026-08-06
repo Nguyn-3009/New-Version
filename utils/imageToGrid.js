@@ -1,5 +1,6 @@
 import { Skia } from "@shopify/react-native-skia";
 import * as ImageManipulator from "expo-image-manipulator";
+import { rgbToLab, labToRgb } from "./colorSpace";
 
 /**
  * Milestone 1: take a picture, convert it to gridSize x gridSize, and map
@@ -228,7 +229,17 @@ function kMeansPlusPlusInit(points, k, rng) {
  */
 export function kMeansQuantizeColors(
   colorGrid,
-  { k = DEFAULT_K, maxIterations = 15, seed = 42, alphaThreshold = BACKGROUND_ALPHA_THRESHOLD } = {},
+  {
+    k = DEFAULT_K,
+    maxIterations = 15,
+    seed = 42,
+    alphaThreshold = BACKGROUND_ALPHA_THRESHOLD,
+    // "lab" clusters in CIELAB, where Euclidean distance approximates
+    // PERCEIVED difference. "rgb" is the original behaviour, kept so the two
+    // can be compared on the same photo. Everything downstream is unchanged:
+    // the palette is always returned as RGB.
+    space = "lab",
+  } = {},
 ) {
   const rows = colorGrid.length;
   const cols = rows > 0 ? colorGrid[0].length : 0;
@@ -243,7 +254,15 @@ export function kMeansQuantizeColors(
       parsedGrid[row][col] = parsed;
       if (!parsed || parsed.a < alphaThreshold) continue;
       pointIndexGrid[row][col] = points.length;
-      points.push(parsed);
+      // sqDist works in whatever space we hand it - it is just Pythagoras -
+      // so the clustering code below needs no changes at all. Only the
+      // coordinates change meaning.
+      if (space === "lab") {
+        const lab = rgbToLab(parsed.r, parsed.g, parsed.b);
+        points.push({ r: lab.L, g: lab.a, b: lab.b });
+      } else {
+        points.push(parsed);
+      }
     }
   }
 
@@ -308,11 +327,12 @@ export function kMeansQuantizeColors(
     });
   }
 
-  const palette = centroids.map((c) => ({
-    r: Math.round(c.r),
-    g: Math.round(c.g),
-    b: Math.round(c.b),
-  }));
+  // Centroids live in the clustering space; the palette must always come back
+  // as RGB, because generateLines and the renderer only speak RGB.
+  const palette = centroids.map((c) => {
+    if (space === "lab") return labToRgb(c.r, c.g, c.b);
+    return { r: Math.round(c.r), g: Math.round(c.g), b: Math.round(c.b) };
+  });
 
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
