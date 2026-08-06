@@ -80,7 +80,7 @@ function paletteToColor(rgb) {
 export function generateLinesData(
   labelGrid,
   palette,
-  { seed = 1337, minBodyLength = 1, maxBodyLength = 375 } = {},
+  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.75 } = {},
 ) {
   const rng = mulberry32(seed);
   const rows = labelGrid.length;
@@ -156,6 +156,7 @@ export function generateLinesData(
     const visited = new Set([excludeKey, keyOf(start.row, start.col)]);
     const path = [start];
     let cur = start;
+    let prevDir = null;
 
     while (path.length < target) {
       const options = [];
@@ -168,7 +169,38 @@ export function generateLinesData(
       }
       if (options.length === 0) break;
 
-      const next = options[Math.floor(rng() * options.length)];
+      // Straightness bias. A pure random walk turns at nearly every cell - which
+
+      // is what makes the picture read so well, and also what tripled the
+
+      // turn-point count the renderer pays for on every re-record and every
+
+      // scale change. Preferring to continue straight keeps the meandering
+
+      // character but emits far fewer turns, because a straight run collapses
+
+      // to a single segment in compressToTurns.
+
+      //
+
+      // 0 = pure random (previous behaviour), 0.9 = mostly straight.
+
+      let next = null;
+
+      if (prevDir && rng() < straightness) {
+
+        next = options.find(
+
+          (o) => o.row - cur.row === prevDir.dr && o.col - cur.col === prevDir.dc,
+
+        );
+
+      }
+
+      if (!next) next = options[Math.floor(rng() * options.length)];
+
+
+      prevDir = { dr: next.row - cur.row, dc: next.col - cur.col };
       visited.add(keyOf(next.row, next.col));
       path.push(next);
       cur = next;
