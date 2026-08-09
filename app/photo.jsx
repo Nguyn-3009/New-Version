@@ -19,7 +19,7 @@ import {
 } from "../utils/gridImageStore";
 
 const GRID_SIZE = 125; // 125x125 grid
-const PALETTE_SIZE = 8; // K for K-Means color quantization
+const PALETTE_SIZE = 32; // Number of colors for K-Means color quantization
 
 export default function PhotoScreen() {
   const router = useRouter();

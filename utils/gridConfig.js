@@ -53,6 +53,16 @@ export const WORLD_HEIGHT = CANVAS_HEIGHT + 2 * GRID_OFFSET_Y;
 
 export const MAX_SCALE = 5;
 
+// How many tiles per axis the resting board is split into. Each tile is a
+// separate Skia.Picture with a cull rect covering only its own area, which is
+// what lets Skia quick-reject off-screen geometry when zoomed in.
+//
+// Higher = better culling when zoomed in, but more Pictures and more
+// duplicated arrows at tile boundaries. 5 gives 25 tiles; at max zoom (5x)
+// roughly 1-4 of them are visible.
+export const TILES_PER_AXIS = 10;
+
+
 // --- Collision sweep --------------------------------------------------------
 // The arrowhead advances MAX_PROGRESS*SPEED/60 px per frame = ~2.1 cells at
 // current tuning. Sampling only the head's endpoint therefore steps OVER

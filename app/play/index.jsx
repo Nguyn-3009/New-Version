@@ -21,7 +21,7 @@ import {
 } from "../../utils/gridImageStore";
 import FlightLine from "../../components/FlightLine";
 import { compileLines } from "../../utils/lineBatch";
-import { recordRestingPicture } from "../../utils/restingPicture";
+import { recordRestingTiles } from "../../utils/restingTiles";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
@@ -430,9 +430,9 @@ export default function AnimatedDashedLines() {
   // Rendering
   // -------------------------------------------------------------------------
 
-  const restingPicture = useMemo(() => {
+  const restingTiles = useMemo(() => {
     const flying = new Set(flights.map((f) => f.id));
-    return recordRestingPicture(compiled, flying, escapedRef.current);
+    return recordRestingTiles(compiled, flying, escapedRef.current);
   }, [compiled, flights]);
 
   const gridPicture = useMemo(() => {
@@ -472,7 +472,9 @@ export default function AnimatedDashedLines() {
           <Canvas style={StyleSheet.absoluteFillObject}>
             <Group transform={cameraTransform}>
               {/*               <Picture picture={gridPicture} /> */}
-              <Picture picture={restingPicture} />
+              {restingTiles.map((t) => (
+                <Picture key={t.key} picture={t.picture} />
+              ))}
               {flights.map((f) => (
                 <FlightLine
                   key={f.id}
