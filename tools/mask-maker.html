@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mask Maker — Line Dash</title>
+<style>
+  :root {
+    --ink: #14161a;
+    --paper: #eceae4;
+    --panel: #ffffff;
+    --rule: #cfccc3;
+    --live: #2f5fd0;
+    --dead: #b9b6ae;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px;
+    background: var(--paper); color: var(--ink);
+    font: 14px/1.5 var(--mono);
+  }
+  h1 { font-size: 15px; letter-spacing: .14em; text-transform: uppercase; margin: 0 0 4px; }
+  .sub { color: #6c6960; margin: 0 0 24px; font-size: 12px; }
+  .wrap { display: grid; grid-template-columns: 300px 1fr; gap: 24px; max-width: 1000px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); padding: 18px; }
+  label { display: block; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #6c6960; margin: 16px 0 6px; }
+  label:first-child { margin-top: 0; }
+  input[type=range] { width: 100%; }
+  input[type=file] { width: 100%; font: inherit; font-size: 12px; }
+  .val { float: right; color: var(--ink); }
+  #preview { display: block; image-rendering: pixelated; width: 100%; border: 1px solid var(--rule); background: #fff; }
+  textarea {
+    width: 100%; height: 220px; margin-top: 14px; font: 11px/1.35 var(--mono);
+    border: 1px solid var(--rule); padding: 10px; resize: vertical; background: #fbfaf8;
+  }
+  button {
+    font: inherit; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+    background: var(--ink); color: var(--paper); border: 0; padding: 10px 16px; cursor: pointer;
+    margin-top: 10px;
+  }
+  button:hover { background: var(--live); }
+  .stat { font-size: 12px; color: #6c6960; margin-top: 12px; }
+  .stat b { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Mask Maker</h1>
+<p class="sub">PNG in, shape mask out. Drop an icon, tune the cutoff until the shape reads, copy the mask into utils/shapeMasks.js</p>
+
+<div class="wrap">
+  <div class="panel">
+    <label>Icon file</label>
+    <input type="file" id="file" accept="image/*">
+
+    <label>Grid size <span class="val" id="sizeVal">40</span></label>
+    <input type="range" id="size" min="10" max="60" value="40">
+
+    <label>Colours (K) <span class="val" id="kVal">4</span></label>
+    <input type="range" id="k" min="1" max="8" value="4">
+
+    <label>Whiteness cutoff <span class="val" id="whiteVal">0.82</span></label>
+    <input type="range" id="white" min="0" max="100" value="82">
+
+    <label>Alpha cutoff <span class="val" id="alphaVal">0.50</span></label>
+    <input type="range" id="alpha" min="0" max="100" value="50">
+
+    <label><input type="checkbox" id="invert"> Invert (shape is the light part)</label>
+
+    <div class="stat">
+      filled <b id="filled">0</b> of <b id="total">0</b> cells
+      &middot; <b id="pct">0%</b>
+    </div>
+    <div id="swatches" style="display:flex;gap:4px;margin-top:10px;flex-wrap:wrap"></div>
+
+    <button id="copy">Copy mask</button>
+  </div>
+
+  <div class="panel">
+    <canvas id="preview" width="40" height="40"></canvas>
+    <textarea id="out" spellcheck="false" placeholder="mask appears here"></textarea>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let img = null;
+
+// Offscreen canvas we sample the source image through.
+const work = document.createElement("canvas");
+const wctx = work.getContext("2d", { willReadFrequently: true });
+
+$("file").onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const im = new Image();
+  im.onload = () => { img = im; URL.revokeObjectURL(url); render(); };
+  im.src = url;
+};
+
+for (const id of ["size", "k", "white", "alpha", "invert"]) {
+  $(id).oninput = render;
+}
+
+// --- colour space + clustering -------------------------------------------
+// Same approach kMeansQuantizeColors uses in the app: cluster in CIELAB so
+// distance matches PERCEIVED difference, and seed the PRNG so a given icon
+// always produces the same palette.
+function srgbToLinear(c){const v=c/255;return v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);}
+function rgbToLab(r,g,b){
+  const R=srgbToLinear(r),G=srgbToLinear(g),B=srgbToLinear(b);
+  const x=(0.4124564*R+0.3575761*G+0.1804375*B)*100/95.047;
+  const y=(0.2126729*R+0.7151522*G+0.0721750*B)*100/100;
+  const z=(0.0193339*R+0.1191920*G+0.9503041*B)*100/108.883;
+  const d=6/29, f=t=>t>d*d*d?Math.cbrt(t):t/(3*d*d)+4/29;
+  const fx=f(x),fy=f(y),fz=f(z);
+  return [116*fy-16, 500*(fx-fy), 200*(fy-fz)];
+}
+function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return ((t^(t>>>14))>>>0)/4294967296;};}
+const sq=(p,q)=>(p[0]-q[0])**2+(p[1]-q[1])**2+(p[2]-q[2])**2;
+
+function kmeans(points, k, seed){
+  if(points.length===0) return {labels:[],centroids:[]};
+  k=Math.min(k, points.length);
+  const rng=mulberry32(seed);
+  // k-means++ init
+  const cents=[points[Math.floor(rng()*points.length)].slice()];
+  const dist=new Array(points.length).fill(Infinity);
+  while(cents.length<k){
+    const last=cents[cents.length-1];
+    let total=0;
+    for(let i=0;i<points.length;i++){const d=sq(points[i],last);if(d<dist[i])dist[i]=d;total+=dist[i];}
+    if(total<=0){cents.push(points[Math.floor(rng()*points.length)].slice());continue;}
+    let th=rng()*total, pick=points.length-1;
+    for(let i=0;i<points.length;i++){th-=dist[i];if(th<=0){pick=i;break;}}
+    cents.push(points[pick].slice());
+  }
+  const labels=new Array(points.length).fill(0);
+  for(let it=0;it<20;it++){
+    let moved=false;
+    for(let i=0;i<points.length;i++){
+      let best=0,bd=Infinity;
+      for(let c=0;c<cents.length;c++){const d=sq(points[i],cents[c]);if(d<bd){bd=d;best=c;}}
+      if(labels[i]!==best){labels[i]=best;moved=true;}
+    }
+    const sum=cents.map(()=>[0,0,0,0]);
+    for(let i=0;i<points.length;i++){const s=sum[labels[i]];s[0]+=points[i][0];s[1]+=points[i][1];s[2]+=points[i][2];s[3]++;}
+    for(let c=0;c<cents.length;c++){if(sum[c][3]===0)continue;cents[c]=[sum[c][0]/sum[c][3],sum[c][1]/sum[c][3],sum[c][2]/sum[c][3]];}
+    if(!moved&&it>0)break;
+  }
+  return {labels,centroids:cents};
+}
+
+const CH="0123456789abcdefghijklmnopqrstuvwxyz";
+const hex=(r,g,b)=>"#"+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,"0")).join("");
+
+function render() {
+  const size = +$("size").value;
+  const K = +$("k").value;
+  const whiteCut = +$("white").value / 100;
+  const alphaCut = +$("alpha").value / 100;
+  const invert = $("invert").checked;
+
+  $("sizeVal").textContent = size;
+  $("kVal").textContent = K;
+  $("whiteVal").textContent = whiteCut.toFixed(2);
+  $("alphaVal").textContent = alphaCut.toFixed(2);
+
+  if (!img) return;
+
+  work.width = size; work.height = size;
+  wctx.clearRect(0, 0, size, size);
+  const scale = Math.min(size / img.width, size / img.height);
+  const dw = img.width * scale, dh = img.height * scale;
+  wctx.imageSmoothingEnabled = true;
+  wctx.imageSmoothingQuality = "high";
+  wctx.drawImage(img, (size - dw) / 2, (size - dh) / 2, dw, dh);
+  const data = wctx.getImageData(0, 0, size, size).data;
+
+  // Pass 1: which cells are part of the shape, and what colour are they.
+  const on = [];
+  const labPts = [];
+  const rgbOf = [];
+  let filled = 0;
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const i = (r * size + c) * 4;
+      const a = data[i + 3] / 255;
+      const lum = (0.2126*data[i] + 0.7152*data[i+1] + 0.0722*data[i+2]) / 255;
+      let keep = a >= alphaCut && lum <= whiteCut;
+      if (invert) keep = a >= alphaCut && lum > whiteCut;
+      on.push(keep);
+      if (keep) {
+        filled++;
+        labPts.push(rgbToLab(data[i], data[i+1], data[i+2]));
+        rgbOf.push([data[i], data[i+1], data[i+2]]);
+      }
+    }
+  }
+
+  // Pass 2: cluster ONLY the cells that are part of the shape, so background
+  // pixels can't drag a centroid toward white.
+  const { labels, centroids } = kmeans(labPts, K, 42);
+
+  // Centroid colour = mean RGB of its members. Averaging in RGB here (rather
+  // than converting the LAB centroid back) keeps the palette faithful to the
+  // pixels that actually produced it.
+  const acc = centroids.map(() => [0,0,0,0]);
+  for (let i = 0; i < labels.length; i++) {
+    const s = acc[labels[i]];
+    s[0]+=rgbOf[i][0]; s[1]+=rgbOf[i][1]; s[2]+=rgbOf[i][2]; s[3]++;
+  }
+  const palette = acc.map(s => s[3] ? hex(s[0]/s[3], s[1]/s[3], s[2]/s[3]) : "#888888");
+
+  // Build the rows: "." for background, a digit/letter for the label index.
+  const rows = [];
+  let n = 0;
+  for (let r = 0; r < size; r++) {
+    let row = "";
+    for (let c = 0; c < size; c++) {
+      row += on[r*size + c] ? CH[labels[n++]] : ".";
+    }
+    rows.push(row);
+  }
+
+  // Preview in the icon's own colours.
+  const pv = $("preview");
+  pv.width = size; pv.height = size;
+  const p = pv.getContext("2d");
+  p.fillStyle = "#ffffff"; p.fillRect(0,0,size,size);
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const ch = rows[r][c];
+      if (ch === ".") continue;
+      p.fillStyle = palette[CH.indexOf(ch)] || "#888";
+      p.fillRect(c, r, 1, 1);
+    }
+  }
+
+  $("filled").textContent = filled;
+  $("total").textContent = size*size;
+  $("pct").textContent = Math.round(100*filled/(size*size)) + "%";
+  $("swatches").innerHTML = palette.map(h =>
+    `<div title="${h}" style="width:26px;height:26px;border:1px solid #cfccc3;background:${h}"></div>`).join("");
+
+  $("out").value =
+    "{\n  palette: [" + palette.map(h=>`"${h}"`).join(", ") + "],\n  rows: [\n" +
+    rows.map(r => '    "' + r + '",').join("\n") + "\n  ],\n}";
+}
+
+$("copy").onclick = () => {
+  $("out").select();
+  document.execCommand("copy");
+};
+</script>
+</body>
+</html>
