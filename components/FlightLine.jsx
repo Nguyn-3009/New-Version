@@ -17,7 +17,7 @@ import {
   withTiming,
 } from "react-native-reanimated";
 
-import { LINE_TRIGGERS } from "../utils/gameShared";
+import { LINE_TRIGGERS, clearLineCells } from "../utils/gameShared";
 import {
   FORWARD_MS,
   MAX_PROGRESS,
@@ -96,7 +96,13 @@ export default function FlightLine({ id, geom, color, onDone }) {
         "worklet";
         if (finished && !settled.value) {
           settled.value = true;
-          runOnJS(onDone)(id, true); // escaped for good
+          // Free the grid cells HERE - at the moment the arrow actually
+          // leaves - not when it was tapped. The tap handler used to clear
+          // them optimistically, so an arrow that later bounced came back to
+          // rest with its cells already gone: visible, untappable, and
+          // transparent to every other arrow. A ghost.
+          clearLineCells(id);
+          runOnJS(onDone)(id, true);
         }
       },
     );

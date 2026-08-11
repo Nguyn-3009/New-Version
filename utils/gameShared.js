@@ -27,3 +27,25 @@ export const LINE_DIRS = makeMutable(null);
 
 // Debug counter only; nothing reacts to it.
 export const onTap = makeMutable(0);
+/**
+ * Remove a line's cells from the trigger grid.
+ *
+ * MUST run on the UI thread. LINE_TRIGGERS is a shared value and this mutates
+ * it NESTED (grid[row][col] = null) - which only affects whichever thread's
+ * copy you are on. Calling it from JS would silently leave the UI thread's
+ * grid unchanged.
+ *
+ * Lives here rather than in the play screen so FlightLine can call it at the
+ * moment an arrow actually escapes, without importing the screen that imports
+ * FlightLine.
+ */
+export function clearLineCells(lineId) {
+  "worklet";
+  const dots = LINE_DOTS_MAP.value?.[lineId];
+  const grid = LINE_TRIGGERS.value;
+  if (!dots || !grid) return;
+  for (let i = 0; i < dots.length; i++) {
+    const { row, col } = dots[i];
+    if (grid[row] !== undefined) grid[row][col] = null;
+  }
+}

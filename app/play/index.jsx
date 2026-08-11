@@ -430,7 +430,10 @@ export default function AnimatedDashedLines() {
             onTap.value++;
             foundLineId = lineId;
             if (isThrough(lineId)) {
-              clearId(lineId);
+              // No clearId here. The grid is only mutated once the arrow has
+              // actually escaped (see FlightLine), because a launch is a
+              // prediction and a bounce would otherwise strand the line
+              // outside the trigger grid permanently.
               runOnJS(startFlight)(lineId);
               return;
             }

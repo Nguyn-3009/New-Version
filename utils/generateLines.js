@@ -140,8 +140,48 @@ export function generateLinesData(
     if (k === 2 && OPPOSITE[fd[0].name] === fd[1].name) return { kind: "corridor" };
 
     const freeNames = new Set(fd.map((d) => d.name));
+    // Every direction whose opposite is free is an equally legal exit. Taking
+    // the FIRST match walked DIRECTIONS in a fixed order, so one direction won
+    // every tie and arrows developed a strong heading bias. Pick at random
+    // among the valid ones instead.
     const blockedDirs = DIRECTIONS.filter((d) => !freeNames.has(d.name));
-    const pointing = blockedDirs.find((d) => freeNames.has(OPPOSITE[d.name]));
+    const validExits = blockedDirs.filter((d) => freeNames.has(OPPOSITE[d.name]));
+
+    // Choosing uniformly at random among valid exits spreads headings nicely
+    // but wrecks COVERAGE: an exit pointing back across open board blanks
+    // every free cell on its way out, which reintroduced ~10% holes.
+    //
+    // So score each exit by how many still-free cells its escape ray would
+    // consume, take the cheapest, and break ties at random. Rays out of a
+    // cluster's edge cost 0 and win; rays across open space lose. Coverage is
+    // preserved AND headings stay varied, because in practice several exits
+    // tie at zero and the random tie-break decides between them.
+    //
+    // This is the same rule already used for isolated 1-cell arrows, now
+    // applied to every head.
+    let pointing;
+    if (validExits.length > 0) {
+      let bestCost = Infinity;
+      const cheapest = [];
+      for (const d of validExits) {
+        let cost = 0;
+        let rr = r + d.dr;
+        let cc = c + d.dc;
+        while (inBounds(rr, cc) && isFree(rr, cc)) {
+          cost++;
+          rr += d.dr;
+          cc += d.dc;
+        }
+        if (cost < bestCost) {
+          bestCost = cost;
+          cheapest.length = 0;
+          cheapest.push(d);
+        } else if (cost === bestCost) {
+          cheapest.push(d);
+        }
+      }
+      pointing = cheapest[Math.floor(rng() * cheapest.length)];
+    }
 
     if (!pointing) return { kind: "corridor" }; // defensive; shouldn't happen for k in {1,2-corner,3}
 
@@ -262,7 +302,31 @@ export function generateLinesData(
   const lines = [];
   const blanks = [];
 
-  const frontier = new Set();
+  // Strict insertion order (FIFO). This peels the board outward-in, which is
+  // what keeps escape rays pointing into already-decided cells - and therefore
+  // what keeps blank coverage at zero. Shuffling this order spreads arrow
+  // heads out nicely but reintroduces ~10% holes, so the ordering stays and
+  // the variety comes from the DIRECTION choice below instead.
+  const frontierSet = new Set();
+  let head = 0;
+  const queue = [];
+
+  const frontier = {
+    add(k) {
+      if (frontierSet.has(k)) return;
+      frontierSet.add(k);
+      queue.push(k);
+    },
+    get size() {
+      return queue.length - head;
+    },
+    popRandom() {
+      const k = queue[head++];
+      frontierSet.delete(k);
+      return k;
+    },
+  };
+
   const requeueNeighbors = (r, c) => {
     for (const d of DIRECTIONS) {
       const nr = r + d.dr;
@@ -293,8 +357,7 @@ export function generateLinesData(
   // changes state (markOccupied/markBlank both requeue neighbors), so this
   // always terminates: every iteration strictly shrinks the free pool.
   while (frontier.size > 0) {
-    const k = frontier.values().next().value;
-    frontier.delete(k);
+    const k = frontier.popRandom();
     const [r, c] = k.split(",").map(Number);
     if (!isFree(r, c)) continue;
 
