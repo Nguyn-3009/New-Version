@@ -70,6 +70,7 @@ export default function RootLayout() {
       />
 
       <Tabs.Screen name="photo" options={{ href: null }} />
+      <Tabs.Screen name="levels" options={{ href: null }} />
     </Tabs>
   );
 }

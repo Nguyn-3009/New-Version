@@ -51,7 +51,7 @@ export const ARROW_TRI = [0, -11, 11, 0, 0, 11]; // scaled with STROKE_WIDTH
 export const WORLD_WIDTH = CANVAS_WIDTH + 2 * GRID_OFFSET_X;
 export const WORLD_HEIGHT = CANVAS_HEIGHT + 2 * GRID_OFFSET_Y;
 
-export const MAX_SCALE = 5;
+export const MAX_SCALE = 0.8; // Change scale since the larger i zoom in the lagger it gets.
 
 // How many tiles per axis the resting board is split into. Each tile is a
 // separate Skia.Picture with a cull rect covering only its own area, which is
@@ -60,7 +60,7 @@ export const MAX_SCALE = 5;
 // Higher = better culling when zoomed in, but more Pictures and more
 // duplicated arrows at tile boundaries. 5 gives 25 tiles; at max zoom (5x)
 // roughly 1-4 of them are visible.
-export const TILES_PER_AXIS = 10;
+export const TILES_PER_AXIS = 5;
 
 
 // --- Collision sweep --------------------------------------------------------

@@ -52,6 +52,19 @@ export function getGridPalette() {
 // Restart reloads straight from the store.
 let puzzleVersion = 0;
 
+// Where the current puzzle came from: {source:"level",level} | {source:"daily",date}
+// | {source:"photo"}. The play screen reads this to decide whether finishing
+// the board should report a level completion.
+let puzzleMeta = { source: "photo" };
+
+export function setPuzzleMeta(meta) {
+  puzzleMeta = meta ?? { source: "photo" };
+}
+
+export function getPuzzleMeta() {
+  return puzzleMeta;
+}
+
 export function getPuzzleVersion() {
   return puzzleVersion;
 }

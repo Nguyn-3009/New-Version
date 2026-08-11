@@ -1,4 +1,4 @@
-import { StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import {
   Gesture,
   GestureDetector,
@@ -11,14 +11,16 @@ import {
 } from "react-native-reanimated";
 import { Canvas, Group, Picture, Skia } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 
 import { LINES as STATIC_LINES } from "../../utils/LINE_TRIGGER";
 import {
   getGridColors,
   getGeneratedLines,
+  getPuzzleMeta,
   getPuzzleVersion,
 } from "../../utils/gridImageStore";
+import { markCleared } from "../../utils/levelProgress";
 import FlightLine from "../../components/FlightLine";
 import { compileLines } from "../../utils/lineBatch";
 import { recordRestingTiles } from "../../utils/restingTiles";
@@ -181,6 +183,12 @@ function clearId(lineId) {
 export default function AnimatedDashedLines() {
   // photoReady is no longer read - the store version drives puzzle reloads.
   const { restart } = useLocalSearchParams();
+  const router = useRouter();
+
+  // After solving, a level sends you onward; a photo or daily just goes home.
+  const meta = getPuzzleMeta();
+  const nextTarget = meta?.source === "level" ? "/levels" : "/";
+  const nextLabel = meta?.source === "level" ? "Next level" : "Done";
 
   const [photoGridColors, setPhotoGridColors] = useState(() => getGridColors());
   const [compiled, setCompiled] = useState(() =>
@@ -295,6 +303,7 @@ export default function AnimatedDashedLines() {
     activeLinesRef.current = lines;
     escapedRef.current = new Set();
     setFlights([]);
+    setSolved(false);
     setCompiled(loadPuzzle(lines));
   }, []);
 
@@ -349,10 +358,24 @@ export default function AnimatedDashedLines() {
     [compiled],
   );
 
-  const endFlight = useCallback((lineId, escaped) => {
-    if (escaped) escapedRef.current.add(lineId);
-    setFlights((prev) => prev.filter((f) => f.id !== lineId));
-  }, []);
+  // The board is solved when every arrow has escaped. Until now the game had
+  // no win state at all - which is fine for a photo you play until bored, but
+  // levels cannot advance without one.
+  const [solved, setSolved] = useState(false);
+
+  const endFlight = useCallback(
+    (lineId, escaped) => {
+      if (escaped) escapedRef.current.add(lineId);
+      setFlights((prev) => prev.filter((f) => f.id !== lineId));
+
+      if (escaped && escapedRef.current.size >= compiled.count) {
+        setSolved(true);
+        const meta = getPuzzleMeta();
+        if (meta?.source === "level") markCleared(meta.level);
+      }
+    },
+    [compiled],
+  );
 
   // -------------------------------------------------------------------------
   // Tap. e.x / e.y now arrive in SCREEN space, because the view is no longer
@@ -488,11 +511,56 @@ export default function AnimatedDashedLines() {
           </Canvas>
         </View>
       </GestureDetector>
+
+      {solved && (
+        <View style={styles.solvedOverlay} pointerEvents="box-none">
+          <View style={styles.solvedCard}>
+            <Text style={styles.solvedTitle}>Solved</Text>
+            <Text style={styles.solvedSub}>Every arrow escaped</Text>
+            <Pressable
+              onPress={() => router.replace(nextTarget)}
+              style={({ pressed }) => [
+                styles.solvedBtn,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Text style={styles.solvedBtnLabel}>{nextLabel}</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  solvedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "flex-end",
+    paddingBottom: 60,
+  },
+  solvedCard: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    paddingVertical: 22,
+    paddingHorizontal: 32,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  solvedTitle: { fontSize: 26, fontWeight: "800", color: "#222" },
+  solvedSub: { fontSize: 13, color: "#888", marginTop: 2, marginBottom: 16 },
+  solvedBtn: {
+    backgroundColor: "#E24B4A",
+    paddingVertical: 13,
+    paddingHorizontal: 34,
+    borderRadius: 12,
+  },
+  solvedBtnLabel: { color: "#fff", fontSize: 16, fontWeight: "700" },
   viewport: {
     flex: 1,
     marginTop: 90,

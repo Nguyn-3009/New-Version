@@ -80,7 +80,7 @@ function paletteToColor(rgb) {
 export function generateLinesData(
   labelGrid,
   palette,
-  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.15 } = {},
+  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0 } = {},
 ) {
   const rng = mulberry32(seed);
   const rows = labelGrid.length;
