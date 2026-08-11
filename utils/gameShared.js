@@ -39,6 +39,17 @@ export const onTap = makeMutable(0);
  * moment an arrow actually escapes, without importing the screen that imports
  * FlightLine.
  */
+export function restoreLineCells(lineId) {
+  "worklet";
+  const dots = LINE_DOTS_MAP.value?.[lineId];
+  const grid = LINE_TRIGGERS.value;
+  if (!dots || !grid) return;
+  for (let i = 0; i < dots.length; i++) {
+    const { row, col } = dots[i];
+    if (grid[row] !== undefined) grid[row][col] = lineId;
+  }
+}
+
 export function clearLineCells(lineId) {
   "worklet";
   const dots = LINE_DOTS_MAP.value?.[lineId];

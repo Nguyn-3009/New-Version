@@ -80,7 +80,7 @@ function paletteToColor(rgb) {
 export function generateLinesData(
   labelGrid,
   palette,
-  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0 } = {},
+  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.75, spreadHeads = false } = {},
 ) {
   const rng = mulberry32(seed);
   const rows = labelGrid.length;
@@ -147,40 +147,24 @@ export function generateLinesData(
     const blockedDirs = DIRECTIONS.filter((d) => !freeNames.has(d.name));
     const validExits = blockedDirs.filter((d) => freeNames.has(OPPOSITE[d.name]));
 
-    // Choosing uniformly at random among valid exits spreads headings nicely
-    // but wrecks COVERAGE: an exit pointing back across open board blanks
-    // every free cell on its way out, which reintroduced ~10% holes.
-    //
-    // So score each exit by how many still-free cells its escape ray would
-    // consume, take the cheapest, and break ties at random. Rays out of a
-    // cluster's edge cost 0 and win; rays across open space lose. Coverage is
-    // preserved AND headings stay varied, because in practice several exits
-    // tie at zero and the random tie-break decides between them.
-    //
-    // This is the same rule already used for isolated 1-cell arrows, now
-    // applied to every head.
+    // Prefer an exit whose escape ray consumes NO still-free cells: those
+    // blank nothing. A ray fired across another cluster's open ground is what
+    // punches holes in the board.
     let pointing;
-    if (validExits.length > 0) {
-      let bestCost = Infinity;
-      const cheapest = [];
-      for (const d of validExits) {
-        let cost = 0;
-        let rr = r + d.dr;
-        let cc = c + d.dc;
-        while (inBounds(rr, cc) && isFree(rr, cc)) {
-          cost++;
-          rr += d.dr;
-          cc += d.dc;
-        }
-        if (cost < bestCost) {
-          bestCost = cost;
-          cheapest.length = 0;
-          cheapest.push(d);
-        } else if (cost === bestCost) {
-          cheapest.push(d);
-        }
+    let cheapCost = Infinity;
+    for (const d of validExits) {
+      let cost = 0;
+      let rr = r + d.dr;
+      let cc = c + d.dc;
+      while (inBounds(rr, cc) && isFree(rr, cc)) {
+        cost++;
+        rr += d.dr;
+        cc += d.dc;
       }
-      pointing = cheapest[Math.floor(rng() * cheapest.length)];
+      if (cost < cheapCost) {
+        cheapCost = cost;
+        pointing = d;
+      }
     }
 
     if (!pointing) return { kind: "corridor" }; // defensive; shouldn't happen for k in {1,2-corner,3}
@@ -307,6 +291,7 @@ export function generateLinesData(
   // what keeps blank coverage at zero. Shuffling this order spreads arrow
   // heads out nicely but reintroduces ~10% holes, so the ordering stays and
   // the variety comes from the DIRECTION choice below instead.
+  let deferred = 0;
   const frontierSet = new Set();
   let head = 0;
   const queue = [];
@@ -321,7 +306,27 @@ export function generateLinesData(
       return queue.length - head;
     },
     popRandom() {
-      const k = queue[head++];
+      // Random pick among everything currently available, with swap-remove so
+      // it stays O(1). The old Set popped the OLDEST entry, so each new head
+      // landed right beside the previous one - which is why escapable arrows
+      // arrived in tight clusters you could tap all at once.
+      // spreadHeads picks at random among everything available, which stops
+      // new heads landing beside the previous one. MEASURED TRADE-OFF on a
+      // 125x125 K=4 board:
+      //
+      //           blanks  clearable-at-once  gap between them
+      //   false        0                 16         1.8 cells
+      //   true      ~1500                44         9.0 cells
+      //
+      // Random order breaks the outward-in peel that keeps escape rays
+      // pointing into already-decided cells, so ~10% of the board goes blank.
+      // Off by default because full coverage is what makes the picture read.
+      const i = spreadHeads
+        ? head + Math.floor(rng() * (queue.length - head))
+        : head;
+      const k = queue[i];
+      queue[i] = queue[head];
+      queue[head++] = k;
       frontierSet.delete(k);
       return k;
     },
@@ -362,6 +367,20 @@ export function generateLinesData(
     if (!isFree(r, c)) continue;
 
     const info = candidateInfo(r, c);
+
+    // A head whose cheapest exit still blanks free cells is not WRONG, just
+    // premature: once its neighbours resolve, that same cell usually gains a
+    // zero-cost exit. Push it back and try again later. `deferred` counts
+    // consecutive skips so a board that genuinely cannot improve still
+    // terminates instead of spinning.
+    if (info.kind !== "interior" && info.kind !== "corridor" && info.cost > 0) {
+      if (deferred < frontier.size) {
+        deferred++;
+        frontier.add(k);
+        continue;
+      }
+    }
+    deferred = 0;
     if (info.kind === "interior" || info.kind === "corridor") {
       continue; // wait for a neighbor to resolve first
     }

@@ -17,7 +17,7 @@ import {
   withTiming,
 } from "react-native-reanimated";
 
-import { LINE_TRIGGERS, clearLineCells } from "../utils/gameShared";
+import { LINE_TRIGGERS, restoreLineCells } from "../utils/gameShared";
 import {
   FORWARD_MS,
   MAX_PROGRESS,
@@ -96,12 +96,9 @@ export default function FlightLine({ id, geom, color, onDone }) {
         "worklet";
         if (finished && !settled.value) {
           settled.value = true;
-          // Free the grid cells HERE - at the moment the arrow actually
-          // leaves - not when it was tapped. The tap handler used to clear
-          // them optimistically, so an arrow that later bounced came back to
-          // rest with its cells already gone: visible, untappable, and
-          // transparent to every other arrow. A ghost.
-          clearLineCells(id);
+          // Cells were already freed at tap time so other arrows can use the
+          // corridor immediately - waiting a full second before clearing made
+          // every following tap bounce, which felt like input lag.
           runOnJS(onDone)(id, true);
         }
       },
@@ -134,7 +131,13 @@ export default function FlightLine({ id, geom, color, onDone }) {
           { duration: RETURN_MS, easing: Easing.linear },
           (done) => {
             "worklet";
-            if (done) runOnJS(onDone)(id, false); // bounced back to rest
+            // THE GHOST FIX. The tap handler clears this line's cells on the
+            // prediction that it will escape. It just didn't - so put them
+            // back. Without this the arrow returns to rest visible but absent
+            // from the trigger grid: untappable, and every other arrow flies
+            // straight through it.
+            restoreLineCells(id);
+            if (done) runOnJS(onDone)(id, false);
           },
         );
       }
