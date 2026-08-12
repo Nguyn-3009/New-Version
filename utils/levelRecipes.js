@@ -66,6 +66,14 @@ const TUTORIAL = [
   { shape: "ring", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 10 ~ 107 arrows
   { shape: "diamond", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 11 ~ 85 arrows
   { shape: "flash", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 12 ~ 183 arrows
+  { shape: "joker", k: 4, pattern: "blobs", straightness: 0.66, seed: 1 },
+  { shape: "eco", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
+  { shape: "cyclops", k: 3, pattern: "blobs", straightness: 0.97, seed: 7 },
+  { shape: "basketball", k: 4, pattern: "blobs", straightness: 0.65, seed: 1 },
+  { shape: "eye", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
+  { shape: "dollar_bag", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
+  { shape: "bomb", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
+  { shape: "football", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
 ];
 
 /** How many levels actually exist. Single source of truth for the UI. */
