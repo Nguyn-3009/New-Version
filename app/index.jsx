@@ -9,7 +9,7 @@ import {
   subscribe,
 } from "../utils/levelProgress";
 import { loadLevel, loadDaily } from "../utils/puzzleLoader";
-import { PHOTO_UNLOCK_LEVEL } from "../utils/levelRecipes";
+import { LEVEL_COUNT, PHOTO_UNLOCK_LEVEL } from "../utils/levelRecipes";
 import { localDateString } from "../utils/streakLogic";
 
 export default function HomeScreen() {
@@ -17,9 +17,13 @@ export default function HomeScreen() {
   const [next, setNext] = useState(1);
 
   useEffect(() => {
-    loadLevelProgress().then(() => setNext(highestUnlocked()));
-    return subscribe(() => setNext(highestUnlocked()));
+    // Clamp to what exists, so "Continue" can't point past the last level.
+    const clamp = () => setNext(Math.min(highestUnlocked(), LEVEL_COUNT));
+    loadLevelProgress().then(clamp);
+    return subscribe(clamp);
   }, []);
+
+  const allDone = next >= LEVEL_COUNT && highestUnlocked() > LEVEL_COUNT;
 
   const photoUnlocked = next > PHOTO_UNLOCK_LEVEL;
 
@@ -43,7 +47,11 @@ export default function HomeScreen() {
         style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
       >
         <Text style={styles.primaryLabel}>
-          {next === 1 ? "Start" : `Continue · Level ${next}`}
+          {allDone
+            ? "Replay · Level " + LEVEL_COUNT
+            : next === 1
+              ? "Start"
+              : `Continue · Level ${next}`}
         </Text>
       </Pressable>
 

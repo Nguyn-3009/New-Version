@@ -22,6 +22,14 @@ const SHAPE_ROTATION = ["heart", "diamond", "ring", "cross"];
 // 125x125 board with thousands of arrows.
 export const PHOTO_UNLOCK_LEVEL = 20;
 
+// Whether levels past the designed table are generated procedurally.
+//
+// This used to be unconditional, which is why levels kept existing beyond the
+// end of the hand-tuned list: getLevelRecipe fell through to an open-ended
+// ramp for ANY n, and the level grid drew a fixed 60 cells regardless. With
+// it off, the game has exactly as many levels as you have designed.
+export const ALLOW_PROCEDURAL_OVERFLOW = false;
+
 /**
  * Difficulty comes from three dials, in order of how much they matter:
  *
@@ -46,26 +54,22 @@ export const PHOTO_UNLOCK_LEVEL = 20;
  *   straightness high = long readable arrows, low = squiggly and harder
  */
 const TUTORIAL = [
-  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 2 }, // lvl 1 ~ 1 arrows
-  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 1 }, // lvl 2 ~ 2 arrows
-  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 7 }, // lvl 3 ~ 3 arrows
-  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 34 }, // lvl 4 ~ 4 arrows
-  { region: 8, k: 1, pattern: "solid", straightness: 0.95, seed: 2 }, // lvl 5 ~ 6 arrows
-  { region: 14, k: 2, pattern: "bands", straightness: 0.9, seed: 1 }, // lvl 6 ~ 8 arrows
-  { region: 14, k: 2, pattern: "bands", straightness: 0.9, seed: 7 }, // lvl 7 ~ 11 arrows
-  { region: 14, k: 2, pattern: "bands", straightness: 0.9, seed: 43 }, // lvl 8 ~ 15 arrows
-  { region: 17, k: 2, pattern: "bands", straightness: 0.9, seed: 16 }, // lvl 9 ~ 20 arrows
-  { region: 22, k: 2, pattern: "bands", straightness: 0.9, seed: 46 }, // lvl 10 ~ 26 arrows
-  { region: 14, k: 3, pattern: "blobs", straightness: 0.85, seed: 27 }, // lvl 11 ~ 34 arrows
-  { region: 14, k: 3, pattern: "blobs", straightness: 0.83, seed: 38 }, // lvl 12 ~ 44 arrows
-  { region: 14, k: 4, pattern: "blobs", straightness: 0.81, seed: 6 }, // lvl 13 ~ 57 arrows
-  { region: 15, k: 4, pattern: "blobs", straightness: 0.79, seed: 23 }, // lvl 14 ~ 73 arrows
-  { region: 18, k: 4, pattern: "blobs", straightness: 0.78, seed: 54 }, // lvl 15 ~ 93 arrows
-  { region: 23, k: 4, pattern: "blobs", straightness: 0.76, seed: 20 }, // lvl 16 ~ 118 arrows
-  { region: 25, k: 5, pattern: "blobs", straightness: 0.74, seed: 8 }, // lvl 17 ~ 150 arrows
-  { region: 30, k: 5, pattern: "blobs", straightness: 0.72, seed: 16 }, // lvl 18 ~ 190 arrows
-  { region: 36, k: 5, pattern: "blobs", straightness: 0.7, seed: 8 }, // lvl 19 ~ 240 arrows
+  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 2 }, // lvl 1
+  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 1 }, // lvl 2
+  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 7 }, // lvl 3
+  { region: 5, k: 1, pattern: "solid", straightness: 0.95, seed: 34 }, // lvl 4
+  { region: 8, k: 1, pattern: "solid", straightness: 0.95, seed: 2 }, // lvl 5
+  { region: 14, k: 2, pattern: "bands", straightness: 0.9, seed: 1 }, // lvl 6
+  { region: 14, k: 2, pattern: "bands", straightness: 0.9, seed: 7 }, // lvl 7
+  { shape: "cross", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 8 ~ 75 arrows
+  { shape: "heart", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 9 ~ 75 arrows
+  { shape: "ring", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 10 ~ 107 arrows
+  { shape: "diamond", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 11 ~ 85 arrows
+  { shape: "flash", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 12 ~ 183 arrows
 ];
+
+/** How many levels actually exist. Single source of truth for the UI. */
+export const LEVEL_COUNT = TUTORIAL.length;
 
 export function getLevelRecipe(level) {
   const n = Math.max(1, Math.floor(level));
@@ -73,6 +77,10 @@ export function getLevelRecipe(level) {
   if (n <= TUTORIAL.length) {
     return { level: n, gridSize: 125, ...TUTORIAL[n - 1] };
   }
+
+  // Past the designed list. Returning null lets callers show "more coming
+  // soon" rather than silently inventing a level nobody has played.
+  if (!ALLOW_PROCEDURAL_OVERFLOW) return null;
 
   // Level 20+: open-ended ramp, with a recognisable SHAPE every few levels.
   // Not every board needs to be something - a plain square reads as "a

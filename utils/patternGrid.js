@@ -18,7 +18,7 @@ import {
   placeMask,
   paletteToRgb,
   readShape,
-} from "./shapeMasks";
+} from "./shapeMasks.js";
 
 const BACKGROUND = -1;
 

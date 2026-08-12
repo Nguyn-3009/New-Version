@@ -23,7 +23,11 @@ import {
 import { markCleared } from "../../utils/levelProgress";
 import FlightLine from "../../components/FlightLine";
 import { compileLines } from "../../utils/lineBatch";
-import { recordRestingTiles } from "../../utils/restingTiles";
+import {
+  buildTileIndex,
+  recordAllTiles,
+  recordOneTile,
+} from "../../utils/restingTiles";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
@@ -336,6 +340,7 @@ export default function AnimatedDashedLines() {
 
   const startFlight = useCallback(
     (lineId) => {
+      console.log("startFlight", lineId); // ← a
       const i = compiled.indexById[lineId];
       if (i === undefined || escapedRef.current.has(lineId)) return;
       setFlights((prev) => {
@@ -365,6 +370,7 @@ export default function AnimatedDashedLines() {
 
   const endFlight = useCallback(
     (lineId, escaped) => {
+      console.log("endFlight", lineId, "escaped:", escaped);
       if (escaped) escapedRef.current.add(lineId);
       setFlights((prev) => prev.filter((f) => f.id !== lineId));
 
@@ -430,9 +436,6 @@ export default function AnimatedDashedLines() {
             onTap.value++;
             foundLineId = lineId;
             if (isThrough(lineId)) {
-              // Freed immediately so the next tap sees an open corridor.
-              // If this arrow ends up bouncing instead, FlightLine puts the
-              // cells back - see restoreLineCells.
               clearId(lineId);
               runOnJS(startFlight)(lineId);
               return;
@@ -456,10 +459,59 @@ export default function AnimatedDashedLines() {
   // Rendering
   // -------------------------------------------------------------------------
 
-  const restingTiles = useMemo(() => {
+  // Tile geometry never changes for a puzzle, so the index is built once.
+  const tileIndex = useMemo(() => buildTileIndex(compiled), [compiled]);
+
+  // Tiles are kept as STATE and patched in place. Re-recording all 25 on every
+  // flight change cost ~42 ms per launch AND per landing - so tapping a few
+  // arrows queued dozens of full rebuilds back to back. But launching one line
+  // only changes the tiles that line touches; the other ~23 are identical.
+  const [tiles, setTiles] = useState([]);
+
+  useEffect(() => {
     const flying = new Set(flights.map((f) => f.id));
-    return recordRestingTiles(compiled, flying, escapedRef.current);
-  }, [compiled, flights]);
+    setTiles(recordAllTiles(compiled, tileIndex, flying, escapedRef.current));
+    // Full rebuild only when the puzzle itself changes.
+  }, [compiled, tileIndex]);
+
+  // Patch just the dirty tiles whenever the flying set changes.
+  const prevFlyingRef = useRef(new Set());
+  useEffect(() => {
+    const flying = new Set(flights.map((f) => f.id));
+    const prev = prevFlyingRef.current;
+
+    const changed = [];
+    for (const id of flying) if (!prev.has(id)) changed.push(id);
+    for (const id of prev) if (!flying.has(id)) changed.push(id);
+    prevFlyingRef.current = flying;
+    if (changed.length === 0) return;
+
+    const dirty = new Set();
+    for (const id of changed) {
+      const i = compiled.indexById[id];
+      if (i === undefined) continue;
+      for (const t of tileIndex.lineTiles[i] ?? []) dirty.add(t);
+    }
+    if (dirty.size === 0) return;
+
+    setTiles((prevTiles) => {
+      const t0 = Date.now(); // ← add
+      const byKey = new Map(prevTiles.map((t) => [t.key, t]));
+      for (const t of dirty) {
+        const rebuilt = recordOneTile(
+          compiled,
+          t,
+          tileIndex,
+          flying,
+          escapedRef.current,
+        );
+        if (rebuilt) byKey.set(t, rebuilt);
+        else byKey.delete(t);
+      }
+      console.log("patch:", Date.now() - t0, "ms |", dirty.size, "of 25 tiles"); // ← add
+      return [...byKey.values()];
+    });
+  }, [flights, compiled, tileIndex]);
 
   const gridPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
@@ -498,7 +550,7 @@ export default function AnimatedDashedLines() {
           <Canvas style={StyleSheet.absoluteFillObject}>
             <Group transform={cameraTransform}>
               {/*               <Picture picture={gridPicture} /> */}
-              {restingTiles.map((t) => (
+              {tiles.map((t) => (
                 <Picture key={t.key} picture={t.picture} />
               ))}
               {flights.map((f) => (

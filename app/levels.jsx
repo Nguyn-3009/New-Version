@@ -15,12 +15,20 @@ import {
   isCleared,
   isUnlocked,
   loadLevelProgress,
+  resetLevelProgress,
   subscribe,
 } from "../utils/levelProgress";
 import { loadLevel } from "../utils/puzzleLoader";
-import { PHOTO_UNLOCK_LEVEL, getLevelRecipe } from "../utils/levelRecipes";
+import {
+  LEVEL_COUNT,
+  PHOTO_UNLOCK_LEVEL,
+  getLevelRecipe,
+} from "../utils/levelRecipes";
 
-const LEVELS_SHOWN = 60;
+// Draw exactly the levels that exist. A hardcoded count drew cells for
+// levels the recipe table doesn't define, which the procedural fall-through
+// then happily generated.
+const LEVELS_SHOWN = LEVEL_COUNT;
 
 export default function LevelsScreen() {
   const router = useRouter();
@@ -63,12 +71,22 @@ export default function LevelsScreen() {
           : `Clear level ${PHOTO_UNLOCK_LEVEL} to unlock photo mode`}
       </Text>
 
+      {__DEV__ && (
+        <Pressable
+          onPress={resetLevelProgress}
+          style={({ pressed }) => [styles.reset, pressed && { opacity: 0.6 }]}
+        >
+          <Text style={styles.resetLabel}>Reset progress (dev only)</Text>
+        </Pressable>
+      )}
+
       <View style={styles.grid}>
         {Array.from({ length: LEVELS_SHOWN }, (_, i) => i + 1).map((level) => {
           const cleared = isCleared(level);
           const open_ = isUnlocked(level);
           const isNext = level === unlocked;
           const recipe = getLevelRecipe(level);
+          if (!recipe) return null;
 
           return (
             <Pressable
@@ -115,6 +133,20 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingTop: 70, paddingBottom: 40 },
   title: { fontSize: 30, fontWeight: "700", color: "#222" },
   sub: { fontSize: 13, color: "#777", marginTop: 6, marginBottom: 22 },
+  // __DEV__ is false in release builds, so this never ships. Progress lives in
+  // AsyncStorage - device storage - so reloading the bundle does NOT clear it.
+  // That is the whole point of it, and also why levels you cleared while
+  // testing stay unlocked across reloads.
+  reset: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: "#d9d5cc",
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    marginBottom: 18,
+  },
+  resetLabel: { fontSize: 12, color: "#999" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   cell: {
     width: 58,

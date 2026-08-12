@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Level Lab — Line Dash</title>
+<style>
+  :root {
+    --ink: #14161a;
+    --paper: #eceae4;
+    --panel: #fff;
+    --rule: #cfccc3;
+    --accent: #2f5fd0;
+    --warn: #b4541f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; background:var(--paper); color:var(--ink); font:13px/1.5 var(--mono); }
+  h1 { font-size:14px; letter-spacing:.16em; text-transform:uppercase; margin:0 0 3px; }
+  .sub { color:#6c6960; font-size:11px; margin:0 0 20px; }
+  .wrap { display:grid; grid-template-columns:280px 1fr 300px; gap:18px; max-width:1300px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); padding:16px; }
+  label { display:block; font-size:10px; letter-spacing:.11em; text-transform:uppercase; color:#6c6960; margin:14px 0 5px; }
+  label:first-child { margin-top:0; }
+  .val { float:right; color:var(--ink); }
+  input[type=range] { width:100%; }
+  select, input[type=number] { width:100%; font:inherit; font-size:12px; padding:5px; border:1px solid var(--rule); background:#fbfaf8; }
+  canvas { display:block; width:100%; border:1px solid var(--rule); background:#fff; }
+  button { font:inherit; font-size:11px; letter-spacing:.08em; text-transform:uppercase; background:var(--ink); color:var(--paper); border:0; padding:9px 14px; cursor:pointer; margin-top:8px; width:100%; }
+  button:hover { background:var(--accent); }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--rule); }
+  button.ghost:hover { background:#f3f1ec; color:var(--ink); }
+  table { width:100%; border-collapse:collapse; font-size:12px; margin-top:10px; }
+  td { padding:3px 0; }
+  td:last-child { text-align:right; font-weight:600; }
+  .warn { color:var(--warn); }
+  ol { padding-left:22px; margin:8px 0; font-size:11px; }
+  ol li { margin:3px 0; cursor:pointer; }
+  ol li:hover { color:var(--accent); }
+  textarea { width:100%; height:150px; font:10px/1.3 var(--mono); border:1px solid var(--rule); padding:8px; background:#fbfaf8; margin-top:8px; resize:vertical; }
+  .err { background:#fdf0e8; border:1px solid #e0b9a0; padding:12px; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>Level Lab</h1>
+<p class="sub">Tune a level, see the real puzzle, add it to the list, export.</p>
+<div id="root" class="err">Loading modules…</div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+
+// The tool imports the GAME'S OWN generator. Nothing is reimplemented here, so
+// a level previewed in this tool is byte-identical to the level the app
+// builds from the same recipe. Requires a server (VSCode "Go Live") because
+// ES module imports are blocked on file://
+let makePatternGrid, generateLinesData, SHAPE_MASKS;
+try {
+  ({ makePatternGrid } = await import("../utils/patternGrid.js"));
+  ({ generateLinesData } = await import("../utils/generateLines.js"));
+  ({ SHAPE_MASKS } = await import("../utils/shapeMasks.js"));
+} catch (e) {
+  $("root").innerHTML =
+    "<b>Could not load the game modules.</b><br><br>" +
+    "This tool needs a local server — open the project folder in VSCode and use " +
+    "<b>Go Live</b>, then browse to <code>/tools/level-lab.html</code>. " +
+    "Opening the file directly will not work.<br><br><code>" + e.message + "</code>";
+  throw e;
+}
+
+$("root").outerHTML = `
+<div class="wrap">
+  <div class="panel">
+    <label>Shape</label>
+    <select id="shape"></select>
+
+    <label>Region (square only) <span class="val" id="regionVal">30</span></label>
+    <input type="range" id="region" min="4" max="125" value="30">
+
+    <label>Pattern</label>
+    <select id="pattern">
+      <option value="blobs">blobs</option>
+      <option value="bands">bands</option>
+      <option value="solid">solid</option>
+    </select>
+
+    <label>Colours K <span class="val" id="kVal">4</span></label>
+    <input type="range" id="k" min="1" max="12" value="4">
+
+    <label>Straightness <span class="val" id="strVal">0.75</span></label>
+    <input type="range" id="str" min="0" max="100" value="75">
+
+    <label>Seed</label>
+    <input type="number" id="seed" value="1" min="1">
+    <button class="ghost" id="reroll">Reroll seed</button>
+
+    <label><input type="checkbox" id="spread"> spreadHeads (spaces arrows out, costs coverage)</label>
+  </div>
+
+  <div class="panel">
+    <canvas id="cv" width="700" height="700"></canvas>
+  </div>
+
+  <div class="panel">
+    <b style="font-size:11px;letter-spacing:.1em;text-transform:uppercase">Stats</b>
+    <table>
+      <tr><td>arrows</td><td id="sArrows">–</td></tr>
+      <tr><td>blank cells</td><td id="sBlanks">–</td></tr>
+      <tr><td>turn points</td><td id="sTurns">–</td></tr>
+      <tr><td>clearable at start</td><td id="sFree">–</td></tr>
+      <tr><td>dependency depth</td><td id="sDepth">–</td></tr>
+      <tr><td>solvable</td><td id="sSolve">–</td></tr>
+    </table>
+
+    <button id="add">Add as level</button>
+
+    <b style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;display:block;margin-top:16px">Level list</b>
+    <ol id="list"></ol>
+    <button class="ghost" id="pop">Remove last</button>
+    <button id="exp">Export</button>
+    <textarea id="out" spellcheck="false"></textarea>
+  </div>
+</div>`;
+
+// Levels 1-7 kept from the tuned curve; everything after is designed here.
+const KEEP = [
+  { region: 5,  k: 1, pattern: "solid", straightness: 0.95, seed: 2  },
+  { region: 5,  k: 1, pattern: "solid", straightness: 0.95, seed: 1  },
+  { region: 5,  k: 1, pattern: "solid", straightness: 0.95, seed: 7  },
+  { region: 5,  k: 1, pattern: "solid", straightness: 0.95, seed: 34 },
+  { region: 8,  k: 1, pattern: "solid", straightness: 0.95, seed: 2  },
+  { region: 14, k: 2, pattern: "bands", straightness: 0.9,  seed: 1  },
+  { region: 14, k: 2, pattern: "bands", straightness: 0.9,  seed: 7  },
+];
+const levels = [...KEEP];
+
+const sel = $("shape");
+sel.innerHTML =
+  '<option value="">— square region —</option>' +
+  Object.keys(SHAPE_MASKS).map(k => `<option value="${k}">${k}</option>`).join("");
+
+for (const id of ["shape","region","pattern","k","str","seed","spread"]) {
+  $(id).oninput = run;
+  $(id).onchange = run;
+}
+$("reroll").onclick = () => { $("seed").value = 1 + Math.floor(Math.random()*999); run(); };
+
+function currentRecipe() {
+  const shape = $("shape").value || null;
+  return {
+    gridSize: 125,
+    shape,
+    region: +$("region").value,
+    pattern: $("pattern").value,
+    k: +$("k").value,
+    straightness: +$("str").value / 100,
+    seed: +$("seed").value || 1,
+    spreadHeads: $("spread").checked,
+  };
+}
+
+// Walk a compressed line back out to every cell it occupies.
+function expand(points) {
+  if (points.length === 1) return [{ row: points[0].row, col: points[0].col }];
+  const out = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const A = points[i], B = points[i + 1];
+    if (A.row === B.row) {
+      const s = A.col < B.col ? 1 : -1;
+      for (let c = A.col;; c += s) { out.push({row:A.row, col:c}); if (c === B.col) break; }
+    } else {
+      const s = A.row < B.row ? 1 : -1;
+      for (let r = A.row;; r += s) { out.push({row:r, col:A.col}); if (r === B.row) break; }
+    }
+  }
+  return out;
+}
+
+// Dependency depth: how many WAVES of clearing it takes if you always clear
+// everything currently escapable. This is the real difficulty signal - arrow
+// count alone says nothing about how tangled the board is.
+function analyse(lines) {
+  const N = 125;
+  const grid = Array.from({length:N}, () => new Array(N).fill(null));
+  const dots = {}, dirs = {};
+  for (const l of lines) {
+    dots[l.id] = expand(l.points);
+    dirs[l.id] = l.dir;
+    for (const {row,col} of dots[l.id]) grid[row][col] = l.id;
+  }
+  const through = id => {
+    const d = dots[id], last = d[d.length-1], {dr,dc} = dirs[id];
+    let r = last.row+dr, c = last.col+dc;
+    while (r>=0 && c>=0 && r<N && c<N) {
+      const h = grid[r][c];
+      if (h && h !== id) return false;
+      r += dr; c += dc;
+    }
+    return true;
+  };
+  const free0 = lines.filter(l => through(l.id)).length;
+  let rem = new Set(lines.map(l => l.id)), depth = 0, stuck = 0;
+  while (rem.size) {
+    depth++;
+    const now = [...rem].filter(through);
+    if (!now.length) { stuck = rem.size; break; }
+    for (const id of now) { for (const {row,col} of dots[id]) grid[row][col] = null; rem.delete(id); }
+  }
+  return { free0, depth, stuck };
+}
+
+let last = null;
+
+function run() {
+  const rec = currentRecipe();
+  $("regionVal").textContent = rec.region;
+  $("kVal").textContent = rec.k;
+  $("strVal").textContent = rec.straightness.toFixed(2);
+
+  const { labelGrid, palette } = makePatternGrid(rec);
+  const { lines, blanks } = generateLinesData(labelGrid, palette, {
+    seed: rec.seed,
+    straightness: rec.straightness,
+    spreadHeads: rec.spreadHeads,
+  });
+  last = { rec, lines };
+
+  const turns = lines.reduce((a,l) => a + l.points.length, 0);
+  const a = analyse(lines);
+
+  $("sArrows").textContent = lines.length;
+  $("sBlanks").textContent = blanks.length;
+  $("sBlanks").className = blanks.length > 0 ? "warn" : "";
+  $("sTurns").textContent = turns;
+  $("sFree").textContent = a.free0;
+  $("sDepth").textContent = a.depth;
+  $("sSolve").textContent = a.stuck ? `NO (${a.stuck} stuck)` : "yes";
+  $("sSolve").className = a.stuck ? "warn" : "";
+
+  draw(lines);
+}
+
+function draw(lines) {
+  const cv = $("cv"), g = cv.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0,0,cv.width,cv.height);
+  if (!lines.length) return;
+
+  // Fit the used area, so a small level fills the preview instead of being a
+  // speck in the middle of a 125x125 field.
+  let minR=1e9,maxR=-1e9,minC=1e9,maxC=-1e9;
+  for (const l of lines) for (const p of l.points) {
+    if (p.row<minR)minR=p.row; if (p.row>maxR)maxR=p.row;
+    if (p.col<minC)minC=p.col; if (p.col>maxC)maxC=p.col;
+  }
+  const pad = 2;
+  const w = (maxC-minC)+1+pad*2, h = (maxR-minR)+1+pad*2;
+  const s = Math.min(cv.width/w, cv.height/h);
+  const ox = (cv.width - w*s)/2, oy = (cv.height - h*s)/2;
+  const X = c => ox + (c - minC + pad) * s;
+  const Y = r => oy + (r - minR + pad) * s;
+
+  g.lineWidth = Math.max(1, s*0.34);
+  g.lineCap = "round"; g.lineJoin = "round";
+
+  for (const l of lines) {
+    g.strokeStyle = l.color; g.fillStyle = l.color;
+    const p = l.points;
+    g.beginPath();
+    g.moveTo(X(p[0].col), Y(p[0].row));
+    for (let i=1;i<p.length;i++) g.lineTo(X(p[i].col), Y(p[i].row));
+    if (p.length === 1) g.lineTo(X(p[0].col), Y(p[0].row));
+    g.stroke();
+
+    // arrowhead along l.dir
+    const last = p[p.length-1];
+    const hx = X(last.col), hy = Y(last.row);
+    const ang = Math.atan2(l.dir.dr, l.dir.dc);
+    const L = s*0.55, W = s*0.32;
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    g.beginPath();
+    g.moveTo(hx + L*ca, hy + L*sa);
+    g.lineTo(hx - W*sa, hy + W*ca);
+    g.lineTo(hx + W*sa, hy - W*ca);
+    g.closePath();
+    g.fill();
+  }
+}
+
+$("add").onclick = () => {
+  if (!last) return;
+  const r = last.rec;
+  levels.push({
+    ...(r.shape ? { shape: r.shape } : { region: r.region }),
+    k: r.k, pattern: r.pattern, straightness: r.straightness, seed: r.seed,
+    ...(r.spreadHeads ? { spreadHeads: true } : {}),
+    _arrows: last.lines.length,
+  });
+  renderList();
+};
+$("pop").onclick = () => { if (levels.length > KEEP.length) { levels.pop(); renderList(); } };
+
+function renderList() {
+  $("list").innerHTML = levels.map((l,i) =>
+    `<li>${l.shape ? l.shape : "sq"+l.region} k${l.k} s${l.seed}${l._arrows!=null?` · ${l._arrows}`:""}</li>`
+  ).join("");
+}
+
+$("exp").onclick = () => {
+  const body = levels.map((l,i) => {
+    const { _arrows, ...rest } = l;
+    const parts = Object.entries(rest).map(([k,v]) =>
+      `${k}: ${typeof v === "string" ? `"${v}"` : v}`).join(", ");
+    return `  { ${parts} },${_arrows!=null?` // lvl ${i+1} ~ ${_arrows} arrows`:` // lvl ${i+1}`}`;
+  }).join("\n");
+  $("out").value = "const TUTORIAL = [\n" + body + "\n];";
+  $("out").select();
+};
+
+renderList();
+run();
+</script>
+</body>
+</html>
