@@ -28,6 +28,21 @@
  *     to earlier-built ones, which is acyclic by construction.
  *   RULE 3 (one color per arrow): the body/tail search never leaves the
  *     head's cluster.
+ *   PLACE-HEAD = EXTREME POINT. A cell qualifies as an arrowhead only if some
+ *     direction has NO still-available cells along its ENTIRE ray - not merely
+ *     a blocked immediate neighbour. That is the rule as designed, and it is
+ *     what makes escape-ray blanking unnecessary: an arrow placed this way can
+ *     never point across cells a later arrow might want, so RULE 2 holds for
+ *     free.
+ *
+ *     An earlier implementation tested only the adjacent cell, which admitted
+ *     heads that were not extreme and then blanked whatever their ray crossed
+ *     to keep them legal. That blanking was a repair for a self-inflicted
+ *     violation, and it cost ~10% of the board whenever head order was
+ *     randomised. Cells already occupied by an earlier-generated arrow do NOT
+ *     disqualify a ray - clearing them first is a legitimate dependency, and
+ *     that is where the puzzle's difficulty comes from.
+ *
  *   RULE 4 (REMOVED): a free cell with zero free same-cluster neighbors used
  *     to be marked blank, which was the ONLY significant source of blank
  *     cells (~3.7% of the grid; escape rays contribute ~0 because they stop
@@ -80,7 +95,7 @@ function paletteToColor(rgb) {
 export function generateLinesData(
   labelGrid,
   palette,
-  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.89, spreadHeads = false } = {},
+  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.25, spreadHeads = true } = {},
 ) {
   const rng = mulberry32(seed);
   const rows = labelGrid.length;
@@ -114,27 +129,27 @@ export function generateLinesData(
     const k = fd.length;
 
     if (k === 0) {
-      // No same-cluster neighbours: this is a 1-cell arrow. Every direction
-      // is "blocked", so any of them is a legal pointing direction. Pick the
-      // one whose escape ray would blank the fewest still-free cells, which
-      // keeps the knock-on blanking to a minimum.
-      let best = DIRECTIONS[0];
-      let bestCost = Infinity;
+      // Isolated cell -> a 1-cell arrow. Same extremeness requirement: only a
+      // direction whose entire ray is clear of available cells qualifies.
+      // Picking the "cheapest" one instead still blanked whatever it crossed,
+      // which is where the remaining holes were coming from.
+      const clearDirs = [];
       for (const d of DIRECTIONS) {
-        let cost = 0;
+        let clear = true;
         let rr = r + d.dr;
         let cc = c + d.dc;
-        while (inBounds(rr, cc) && isFree(rr, cc)) {
-          cost++;
+        while (inBounds(rr, cc)) {
+          if (isFree(rr, cc)) { clear = false; break; }
           rr += d.dr;
           cc += d.dc;
         }
-        if (cost < bestCost) {
-          bestCost = cost;
-          best = d;
-        }
+        if (clear) clearDirs.push(d);
       }
-      return { kind: "single", pointing: best };
+      if (clearDirs.length === 0) return { kind: "notyet" };
+      return {
+        kind: "single",
+        pointing: clearDirs[Math.floor(rng() * clearDirs.length)],
+      };
     }
     if (k === 4) return { kind: "interior" };
     if (k === 2 && OPPOSITE[fd[0].name] === fd[1].name) return { kind: "corridor" };
@@ -150,24 +165,36 @@ export function generateLinesData(
     // Prefer an exit whose escape ray consumes NO still-free cells: those
     // blank nothing. A ray fired across another cluster's open ground is what
     // punches holes in the board.
-    let pointing;
-    let cheapCost = Infinity;
+    // EXTREME-POINT TEST (the doc's actual rule).
+    //
+    // A direction only qualifies if its ENTIRE ray contains no still-available
+    // cells - not merely if the adjacent cell is blocked. That is what "the
+    // arrowhead is at an extreme point + pointing outward" means, and it is
+    // what makes escape-ray blanking unnecessary: an arrow placed this way can
+    // never point across cells a later arrow might want.
+    //
+    // Cells already occupied by an earlier-generated arrow are fine - they are
+    // decided, and clearing them first is a legitimate dependency, which is
+    // where the puzzle's difficulty comes from.
+    const extremeExits = [];
     for (const d of validExits) {
-      let cost = 0;
+      let clear = true;
       let rr = r + d.dr;
       let cc = c + d.dc;
-      while (inBounds(rr, cc) && isFree(rr, cc)) {
-        cost++;
+      while (inBounds(rr, cc)) {
+        if (isFree(rr, cc)) { clear = false; break; }
         rr += d.dr;
         cc += d.dc;
       }
-      if (cost < cheapCost) {
-        cheapCost = cost;
-        pointing = d;
-      }
+      if (clear) extremeExits.push(d);
     }
 
-    if (!pointing) return { kind: "corridor" }; // defensive; shouldn't happen for k in {1,2-corner,3}
+    // Not extreme in ANY direction: not a valid head YET. Skip it - the cell
+    // stays free and is reconsidered once a neighbour resolves, exactly like
+    // interior and corridor cells.
+    if (extremeExits.length === 0) return { kind: "notyet" };
+
+    const pointing = extremeExits[Math.floor(rng() * extremeExits.length)];
 
     return { kind: "head", pointing };
   }
@@ -291,7 +318,7 @@ export function generateLinesData(
   // what keeps blank coverage at zero. Shuffling this order spreads arrow
   // heads out nicely but reintroduces ~10% holes, so the ordering stays and
   // the variety comes from the DIRECTION choice below instead.
-  let deferred = 0;
+  let sinceProgress = 0;
   const frontierSet = new Set();
   let head = 0;
   const queue = [];
@@ -310,17 +337,14 @@ export function generateLinesData(
       // it stays O(1). The old Set popped the OLDEST entry, so each new head
       // landed right beside the previous one - which is why escapable arrows
       // arrived in tight clusters you could tap all at once.
-      // spreadHeads picks at random among everything available, which stops
-      // new heads landing beside the previous one. MEASURED TRADE-OFF on a
-      // 125x125 K=4 board:
+      // Random pick among everything currently available, so a new head does
+      // not land beside the previous one. FIFO order made escapable arrows
+      // arrive in tight clusters the player could tap all at once, and pinned
+      // headings to whichever side was seeded first.
       //
-      //           blanks  clearable-at-once  gap between them
-      //   false        0                 16         1.8 cells
-      //   true      ~1500                44         9.0 cells
-      //
-      // Random order breaks the outward-in peel that keeps escape rays
-      // pointing into already-decided cells, so ~10% of the board goes blank.
-      // Off by default because full coverage is what makes the picture read.
+      // This used to cost ~10% blank coverage. It no longer does: the blanks
+      // came from a bug in the extremeness test, not from the ordering. See
+      // candidateInfo.
       const i = spreadHeads
         ? head + Math.floor(rng() * (queue.length - head))
         : head;
@@ -368,22 +392,23 @@ export function generateLinesData(
 
     const info = candidateInfo(r, c);
 
-    // A head whose cheapest exit still blanks free cells is not WRONG, just
-    // premature: once its neighbours resolve, that same cell usually gains a
-    // zero-cost exit. Push it back and try again later. `deferred` counts
-    // consecutive skips so a board that genuinely cannot improve still
-    // terminates instead of spinning.
-    if (info.kind !== "interior" && info.kind !== "corridor" && info.cost > 0) {
-      if (deferred < frontier.size) {
-        deferred++;
-        frontier.add(k);
-        continue;
-      }
+    if (
+      info.kind === "interior" ||
+      info.kind === "corridor" ||
+      info.kind === "notyet"
+    ) {
+      // Put it back rather than dropping it. With FIFO order a skipped cell is
+      // always revisited via requeueNeighbors, but under random order a whole
+      // region can be skipped and then stranded, leaving cells that are
+      // neither an arrow nor blank. `sinceProgress` guards the obvious risk:
+      // if we cycle the entire frontier without placing anything, nothing more
+      // is achievable and we stop.
+      frontier.add(k);
+      sinceProgress++;
+      if (sinceProgress > frontier.size) break;
+      continue;
     }
-    deferred = 0;
-    if (info.kind === "interior" || info.kind === "corridor") {
-      continue; // wait for a neighbor to resolve first
-    }
+    sinceProgress = 0;
 
     // info.kind === "head"
     const label = labelOf(r, c);

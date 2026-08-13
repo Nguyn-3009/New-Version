@@ -74,6 +74,7 @@ const TUTORIAL = [
   { shape: "dollar_bag", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
   { shape: "bomb", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
   { shape: "football", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
+  { shape: "world", k: 4, pattern: "bands", straightness: 0.59, seed: 1 },
 ];
 
 /** How many levels actually exist. Single source of truth for the UI. */

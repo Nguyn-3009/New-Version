@@ -60,7 +60,7 @@ export const MAX_SCALE = 0.8; // Change scale since the larger i zoom in the lag
 // Higher = better culling when zoomed in, but more Pictures and more
 // duplicated arrows at tile boundaries. 5 gives 25 tiles; at max zoom (5x)
 // roughly 1-4 of them are visible.
-export const TILES_PER_AXIS = 5;
+export const TILES_PER_AXIS = 10;
 
 
 // --- Collision sweep --------------------------------------------------------

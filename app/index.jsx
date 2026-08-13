@@ -25,7 +25,7 @@ export default function HomeScreen() {
 
   const allDone = next >= LEVEL_COUNT && highestUnlocked() > LEVEL_COUNT;
 
-  const photoUnlocked = next > PHOTO_UNLOCK_LEVEL;
+  const photoUnlocked = next >= PHOTO_UNLOCK_LEVEL;
 
   const play = (level) => {
     loadLevel(level);
