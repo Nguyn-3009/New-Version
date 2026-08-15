@@ -220,38 +220,41 @@ export function generateLinesData(
       }
       if (options.length === 0) break;
 
-      // Straightness bias. A pure random walk turns at nearly every cell - which
-
-      // is what makes the picture read so well, and also what tripled the
-
-      // turn-point count the renderer pays for on every re-record and every
-
-      // scale change. Preferring to continue straight keeps the meandering
-
-      // character but emits far fewer turns, because a straight run collapses
-
-      // to a single segment in compressToTurns.
-
+      // WARNSDORFF: step into the MOST CONSTRAINED neighbour first.
       //
-
-      // 0 = pure random (previous behaviour), 0.9 = mostly straight.
-
+      // A greedy walk strands cells behind it: a cell whose last free neighbour
+      // just got consumed becomes isolated and can then only ever be a 1-cell
+      // arrow. Those were ~34% of all arrows, and clusters of lone arrowheads
+      // read as blur rather than as picture.
+      //
+      // Preferring the neighbour with the fewest onward options absorbs the
+      // cells that are about to be cut off, so long arrows form instead of
+      // debris. Straightness still decides among equally-constrained options,
+      // so the squiggle/turn-point trade-off keeps working.
       let next = null;
 
-      if (prevDir && rng() < straightness) {
-
-        next = options.find(
-
-          (o) => o.row - cur.row === prevDir.dr && o.col - cur.col === prevDir.dc,
-
-        );
-
+      let bestDeg = Infinity;
+      const cheapest = [];
+      for (const o of options) {
+        let deg = 0;
+        for (const d of DIRECTIONS) {
+          const nr = o.row + d.dr;
+          const nc = o.col + d.dc;
+          if (!isFreeSameLabel(nr, nc, label)) continue;
+          if (visited.has(keyOf(nr, nc))) continue;
+          deg++;
+        }
+        if (deg < bestDeg) { bestDeg = deg; cheapest.length = 0; cheapest.push(o); }
+        else if (deg === bestDeg) cheapest.push(o);
       }
 
-      if (!next) next = options[Math.floor(rng() * options.length)];
+      if (prevDir && rng() < straightness) {
+        next = cheapest.find(
+          (o) => o.row - cur.row === prevDir.dr && o.col - cur.col === prevDir.dc,
+        );
+      }
+      if (!next) next = cheapest[Math.floor(rng() * cheapest.length)];
 
-
-      prevDir = { dr: next.row - cur.row, dc: next.col - cur.col };
       visited.add(keyOf(next.row, next.col));
       path.push(next);
       cur = next;

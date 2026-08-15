@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
+import { GRID_ROWS } from "../utils/gridConfig";
 import { imageToGridColors, kMeansQuantizeColors } from "../utils/imageToGrid";
 import { generateLinesData } from "../utils/generateLines";
 import {
@@ -18,13 +19,24 @@ import {
   setGeneratedLines,
 } from "../utils/gridImageStore";
 
-const GRID_SIZE = 125; // 125x125 grid
-const PALETTE_SIZE = 32; // Number of colors for K-Means color quantization
+// Resolution comes from gridConfig, NOT a local constant. These were two
+// independent 125s before, which is how CANVAS_WIDTH=200 once produced a
+// labelGrid addressing rows the trigger grid didn't have.
+const GRID_SIZE = GRID_ROWS;
+const PALETTE_SIZE = 4; // Number of colors for K-Means color quantization
 
 export default function PhotoScreen() {
   const router = useRouter();
   const [previewUri, setPreviewUri] = useState(null);
   const [processing, setProcessing] = useState(false);
+
+  // Crop vs whole image.
+  //
+  // "Whole" stretches the entire photo into the square grid - every pixel is
+  // represented, but a landscape subject gets squashed and each face lands on
+  // a handful of cells. "Crop" lets the player frame one subject, which is
+  // the case the grid resolution actually handles well.
+  const [cropMode, setCropMode] = useState(true);
 
   async function pickFromCamera() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -38,6 +50,8 @@ export default function PhotoScreen() {
 
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: "images",
+      allowsEditing: cropMode,
+      aspect: [1, 1],
       quality: 1,
     });
 
@@ -56,6 +70,8 @@ export default function PhotoScreen() {
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: "images",
+      allowsEditing: cropMode,
+      aspect: [1, 1],
       quality: 1,
     });
 
@@ -115,6 +131,33 @@ export default function PhotoScreen() {
         </View>
       )}
 
+      <View style={styles.segment}>
+        {[
+          { key: true, label: "Crop to subject" },
+          { key: false, label: "Whole image" },
+        ].map((opt) => (
+          <Pressable
+            key={String(opt.key)}
+            onPress={() => setCropMode(opt.key)}
+            style={[styles.segItem, cropMode === opt.key && styles.segItemOn]}
+          >
+            <Text
+              style={[
+                styles.segLabel,
+                cropMode === opt.key && styles.segLabelOn,
+              ]}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.segHint}>
+        {cropMode
+          ? "Frame one subject — a face reads far better than a whole scene."
+          : "The full photo is squeezed into the square grid."}
+      </Text>
+
       <View style={styles.buttonRow}>
         <Pressable style={styles.button} onPress={pickFromCamera}>
           <Text style={styles.buttonText}>Take Photo</Text>
@@ -143,6 +186,31 @@ export default function PhotoScreen() {
 }
 
 const styles = StyleSheet.create({
+  segment: {
+    flexDirection: "row",
+    alignSelf: "stretch",
+    backgroundColor: "#eceae4",
+    borderRadius: 10,
+    padding: 3,
+    marginTop: 18,
+  },
+  segItem: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  segItemOn: { backgroundColor: "#fff" },
+  segLabel: { fontSize: 14, color: "#8a877f", fontWeight: "600" },
+  segLabelOn: { color: "#222" },
+  segHint: {
+    fontSize: 12,
+    color: "#999",
+    textAlign: "center",
+    marginTop: 8,
+    marginBottom: 4,
+    paddingHorizontal: 20,
+  },
   container: {
     flex: 1,
     alignItems: "center",
