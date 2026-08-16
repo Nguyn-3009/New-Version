@@ -21,6 +21,7 @@ import {
   getPuzzleVersion,
 } from "../../utils/gridImageStore";
 import { markCleared } from "../../utils/levelProgress";
+import { livesFor } from "../../utils/gameRules";
 import FlightLine from "../../components/FlightLine";
 import { compileLines } from "../../utils/lineBatch";
 import {
@@ -308,6 +309,7 @@ export default function AnimatedDashedLines() {
     escapedRef.current = new Set();
     setFlights([]);
     setSolved(false);
+    setLives(livesFor(getPuzzleMeta()));
     setCompiled(loadPuzzle(lines));
   }, []);
 
@@ -340,7 +342,6 @@ export default function AnimatedDashedLines() {
 
   const startFlight = useCallback(
     (lineId) => {
-      console.log("startFlight", lineId); // ← a
       const i = compiled.indexById[lineId];
       if (i === undefined || escapedRef.current.has(lineId)) return;
       setFlights((prev) => {
@@ -368,16 +369,34 @@ export default function AnimatedDashedLines() {
   // levels cannot advance without one.
   const [solved, setSolved] = useState(false);
 
+  // Lives are spent on COLLISIONS, not taps. An arrow that bounces is the game
+  // saying your read was wrong; an arrow that escapes cleanly costs nothing.
+  const maxLives = livesFor(meta);
+  const [lives, setLives] = useState(maxLives);
+  const dead = lives <= 0;
+
   const endFlight = useCallback(
     (lineId, escaped) => {
-      console.log("endFlight", lineId, "escaped:", escaped);
-      if (escaped) escapedRef.current.add(lineId);
-      setFlights((prev) => prev.filter((f) => f.id !== lineId));
+      // filter() always returns a new array, so bail out by identity when
+      // nothing was removed - otherwise a stray call forces a re-render and a
+      // tile re-record for no reason.
+      setFlights((prev) =>
+        prev.some((f) => f.id === lineId)
+          ? prev.filter((f) => f.id !== lineId)
+          : prev,
+      );
 
-      if (escaped && escapedRef.current.size >= compiled.count) {
+      if (!escaped) {
+        // Bounced: blocked by another arrow.
+        setLives((l) => Math.max(0, l - 1));
+        return;
+      }
+
+      escapedRef.current.add(lineId);
+      if (escapedRef.current.size >= compiled.count) {
         setSolved(true);
-        const meta = getPuzzleMeta();
-        if (meta?.source === "level") markCleared(meta.level);
+        const m = getPuzzleMeta();
+        if (m?.source === "level") markCleared(m.level);
       }
     },
     [compiled],
@@ -508,7 +527,6 @@ export default function AnimatedDashedLines() {
         if (rebuilt) byKey.set(t, rebuilt);
         else byKey.delete(t);
       }
-      console.log("patch:", Date.now() - t0, "ms |", dirty.size, "of 25 tiles"); // ← add
       return [...byKey.values()];
     });
   }, [flights, compiled, tileIndex]);
@@ -567,6 +585,52 @@ export default function AnimatedDashedLines() {
         </View>
       </GestureDetector>
 
+      <View style={styles.hud} pointerEvents="none">
+        <Text style={styles.hearts}>
+          {"\u2665 ".repeat(lives).trim()}
+          {lives < maxLives ? (
+            <Text style={styles.heartsLost}>
+              {" " + "\u2665 ".repeat(maxLives - lives).trim()}
+            </Text>
+          ) : null}
+        </Text>
+      </View>
+
+      {/* Game over. pointerEvents defaults to "auto" here, unlike the solved
+          overlay - a dead board must stop accepting taps, and covering it is
+          simpler and more reliable than gating the tap worklet on a shared
+          value. */}
+      {dead && !solved && (
+        <View style={styles.deadOverlay}>
+          <View style={styles.solvedCard}>
+            <Text style={styles.solvedTitle}>Out of lives</Text>
+            <Text style={styles.solvedSub}>
+              {maxLives} collisions — every arrow has to escape cleanly
+            </Text>
+            <Pressable
+              onPress={() => reload(activeLinesRef.current)}
+              style={({ pressed }) => [
+                styles.solvedBtn,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Text style={styles.solvedBtnLabel}>Try again</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => router.replace(nextTarget)}
+              style={({ pressed }) => [
+                styles.deadGhost,
+                pressed && { opacity: 0.6 },
+              ]}
+            >
+              <Text style={styles.deadGhostLabel}>
+                {meta?.source === "level" ? "Back to levels" : "Back"}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {solved && (
         <View style={styles.solvedOverlay} pointerEvents="box-none">
           <View style={styles.solvedCard}>
@@ -589,6 +653,23 @@ export default function AnimatedDashedLines() {
 }
 
 const styles = StyleSheet.create({
+  hud: {
+    position: "absolute",
+    top: 78,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  hearts: { fontSize: 22, color: "#E24B4A", letterSpacing: 2 },
+  heartsLost: { color: "#d8d5ce" },
+  deadOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(245,245,245,0.82)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  deadGhost: { marginTop: 12, paddingVertical: 8, paddingHorizontal: 20 },
+  deadGhostLabel: { color: "#888", fontSize: 14, fontWeight: "600" },
   solvedOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: "center",

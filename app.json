@@ -35,7 +35,8 @@
           "photosPermission": "Allow Line Dash to access your photos so you can start a game from a picture.",
           "cameraPermission": "Allow Line Dash to access your camera so you can start a game from a photo."
         }
-      ]
+      ],
+      "expo-audio"
     ]
   }
 }

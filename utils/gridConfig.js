@@ -3,8 +3,8 @@
 // change to DOT_SPACING in one place silently desynced tap detection from
 // rendering.
 
-export const CANVAS_WIDTH = 2560;
-export const CANVAS_HEIGHT = 2560;
+export const CANVAS_WIDTH = 2500;
+export const CANVAS_HEIGHT = 2500;
 
 // RESOLUTION.
 //
@@ -21,7 +21,7 @@ export const CANVAS_HEIGHT = 2560;
 //   generation    ~480ms -> ~420ms   unchanged; never was the bottleneck
 //   K-Means K=32   ~32ms -> ~216ms   the real added cost, once per photo
 //   turn points     ~10k -> ~30k     the render cost; watch this one
-export const DOT_SPACING = 10;
+export const DOT_SPACING = 13;
 export const GRID_OFFSET_X = 40;
 export const GRID_OFFSET_Y = 40;
 
@@ -54,7 +54,7 @@ export const FORWARD_RATE = MAX_PROGRESS / FORWARD_MS; // progress units per ms
 // colour, so widening them was the only way to see them. Now that arrows are
 // luminance-shifted away from their background (see arrowColor below), a
 // thinner stroke reads better and leaves the dot grid legible underneath.
-export const STROKE_WIDTH = 8;
+export const STROKE_WIDTH = 10;
 export const BASE_OPACITY = 0.2;
 
 // Arrowhead triangle, in local space, pointing along +x. Matches the old
