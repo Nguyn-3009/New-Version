@@ -15,8 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.nguyn3009.linedash",
-      "deploymentTarget": "15.1"
+      "bundleIdentifier": "com.nguyn3009.linedash"
     },
     "android": {
       "adaptiveIcon": {
@@ -36,6 +35,17 @@
         {
           "photosPermission": "Allow Line Dash to access your photos so you can start a game from a picture.",
           "cameraPermission": "Allow Line Dash to access your camera so you can start a game from a photo."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          },
+          "android": {
+            "minSdkVersion": 24
+          }
         }
       ]
     ]
