@@ -3,8 +3,8 @@
 // change to DOT_SPACING in one place silently desynced tap detection from
 // rendering.
 
-export const CANVAS_WIDTH = 2500;
-export const CANVAS_HEIGHT = 2500;
+export const CANVAS_WIDTH = 2400;
+export const CANVAS_HEIGHT = 2400;
 
 // RESOLUTION.
 //
@@ -21,7 +21,7 @@ export const CANVAS_HEIGHT = 2500;
 //   generation    ~480ms -> ~420ms   unchanged; never was the bottleneck
 //   K-Means K=32   ~32ms -> ~216ms   the real added cost, once per photo
 //   turn points     ~10k -> ~30k     the render cost; watch this one
-export const DOT_SPACING = 13;
+export const DOT_SPACING = 12;
 export const GRID_OFFSET_X = 40;
 export const GRID_OFFSET_Y = 40;
 

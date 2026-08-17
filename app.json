@@ -1,8 +1,8 @@
 {
   "expo": {
-    "scheme": "myapp",
-    "name": "React_Native",
-    "slug": "React_Native",
+    "scheme": "linedash",
+    "name": "Line Dash",
+    "slug": "line-dash",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,9 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nguyn3009.linedash",
+      "deploymentTarget": "15.1"
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +24,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.anonymous.React_Native"
+      "package": "com.nguyn3009.linedash"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,8 +37,7 @@
           "photosPermission": "Allow Line Dash to access your photos so you can start a game from a picture.",
           "cameraPermission": "Allow Line Dash to access your camera so you can start a game from a photo."
         }
-      ],
-      "expo-audio"
+      ]
     ]
   }
 }
