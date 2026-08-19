@@ -68,7 +68,7 @@ const TUTORIAL = [
   { shape: "flash", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 }, // lvl 12 ~ 183 arrows
   { shape: "joker", k: 4, pattern: "blobs", straightness: 0.66, seed: 1 },
   { shape: "eco", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
-  { shape: "cyclops", k: 3, pattern: "blobs", straightness: 0.97, seed: 7 },
+  { shape: "tap", k: 4, pattern: "blobs", straightness: 0.5, seed: 1 },
   { shape: "basketball", k: 4, pattern: "blobs", straightness: 0.65, seed: 1 },
   { shape: "eye", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },
   { shape: "dollar_bag", k: 4, pattern: "blobs", straightness: 0.75, seed: 1 },

@@ -79,6 +79,30 @@ export async function markCleared(level) {
   return next;
 }
 
+/**
+ * Mark every level up to `upTo` as cleared. DEV ONLY.
+ *
+ * Progress lives in AsyncStorage, which is per-app: Expo Go and a development
+ * build are different apps with different sandboxes, so switching between them
+ * starts you back at level 1. Replaying twenty levels to reach a feature you
+ * are testing is not a good use of an afternoon.
+ */
+export async function unlockUpTo(upTo) {
+  const cleared = {};
+  for (let i = 1; i <= upTo; i++) cleared[i] = true;
+
+  const next = { highestCleared: upTo, cleared };
+  cache = next;
+  emit();
+
+  try {
+    await AsyncStorage.setItem(KEY, JSON.stringify(next));
+  } catch (e) {
+    console.warn("[levels] unlock save failed:", e?.message);
+  }
+  return next;
+}
+
 export async function resetLevelProgress() {
   cache = { ...EMPTY };
   emit();

@@ -16,6 +16,7 @@ import {
   isUnlocked,
   loadLevelProgress,
   resetLevelProgress,
+  unlockUpTo,
   subscribe,
 } from "../utils/levelProgress";
 import { loadLevel } from "../utils/puzzleLoader";
@@ -72,12 +73,22 @@ export default function LevelsScreen() {
       </Text>
 
       {__DEV__ && (
-        <Pressable
-          onPress={resetLevelProgress}
-          style={({ pressed }) => [styles.reset, pressed && { opacity: 0.6 }]}
-        >
-          <Text style={styles.resetLabel}>Reset progress (dev only)</Text>
-        </Pressable>
+        <View style={styles.devRow}>
+          <Pressable
+            onPress={() => unlockUpTo(PHOTO_UNLOCK_LEVEL)}
+            style={({ pressed }) => [styles.reset, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.resetLabel}>
+              Unlock through {PHOTO_UNLOCK_LEVEL} (dev)
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={resetLevelProgress}
+            style={({ pressed }) => [styles.reset, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.resetLabel}>Reset (dev)</Text>
+          </Pressable>
+        </View>
       )}
 
       <View style={styles.grid}>
@@ -137,14 +148,13 @@ const styles = StyleSheet.create({
   // AsyncStorage - device storage - so reloading the bundle does NOT clear it.
   // That is the whole point of it, and also why levels you cleared while
   // testing stay unlocked across reloads.
+  devRow: { flexDirection: "row", gap: 8, marginBottom: 18, flexWrap: "wrap" },
   reset: {
-    alignSelf: "flex-start",
     borderWidth: 1,
     borderColor: "#d9d5cc",
     borderRadius: 8,
     paddingVertical: 7,
     paddingHorizontal: 12,
-    marginBottom: 18,
   },
   resetLabel: { fontSize: 12, color: "#999" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },

@@ -33,9 +33,21 @@ import { rgbToLab, labToRgb } from "./colorSpace";
  *   strings, indexed as colors[row][col]
  */
 export async function imageToGridColors(uri, gridSize = 125) {
+  // ALWAYS PNG.
+  //
+  // Normalisation exists to launder HEIC and content:// URIs into something
+  // Skia decodes reliably - but the format it converts TO matters: JPEG has no
+  // alpha channel, so a segmented cut-out gets its transparent background
+  // flattened to white and every cell reads as opaque. That made the alpha
+  // check downstream unreachable.
+  //
+  // PNG is larger and marginally slower to encode. That cost is paid once per
+  // photo, on a file that is about to be downscaled to a 256x256 grid, so it
+  // is not worth a flag - and a flag is one more thing to forget to set.
+
   const normalized = await ImageManipulator.manipulateAsync(uri, [], {
     compress: 1,
-    format: ImageManipulator.SaveFormat.JPEG,
+    format: ImageManipulator.SaveFormat.PNG,
   });
 
   const data = await Skia.Data.fromURI(normalized.uri);
@@ -140,6 +152,14 @@ export async function imageToGridColors(uri, gridSize = 125) {
 const DEFAULT_K = 32;
 const BACKGROUND_ALPHA_THRESHOLD = 0.15;
 
+// Fallback for images that have NO alpha at all - a cut-out exported as JPEG,
+// or any flat photo. Cells brighter than this are treated as background.
+//
+// 0.93 is deliberately high: it should catch the flat white a transparent PNG
+// collapses to when flattened, without eating genuinely light parts of a
+// subject (a white shirt sits well below this once shading is accounted for).
+const BACKGROUND_WHITE_THRESHOLD = 0.93;
+
 const RGBA_RE =
   /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)/;
 
@@ -214,13 +234,17 @@ function kMeansPlusPlusInit(points, k, rng) {
 /**
  * K-Means quantize a Milestone-1 color grid down to K representative colors.
  *
- * Background/near-transparent cells (alpha < alphaThreshold) are excluded
+ * Background cells are excluded from clustering AND labelled -1, so they never
+ * become board. Two rules, both always on: near-transparent (alpha <
+ * alphaThreshold) and near-white (luminance >= whiteThreshold). The second is
+ * the fallback for cut-outs whose alpha was lost upstream.
+ * Original note: near-transparent cells (alpha < alphaThreshold) are excluded
  * from clustering entirely and passed through unchanged - they're never
  * part of the game's playable region.
  *
  * @param {string[][]} colorGrid - gridSize x gridSize "rgba(r,g,b,a)" strings
  *   (Milestone 1's output).
- * @param {{k?: number, maxIterations?: number, seed?: number, alphaThreshold?: number}} [options]
+ * @param {{k?: number, maxIterations?: number, seed?: number, alphaThreshold?: number, whiteThreshold?: number}} [options]
  * @returns {{
  *   quantizedColorGrid: string[][],   // same shape as colorGrid, snapped to the palette
  *   labelGrid: number[][],            // cluster index per cell, -1 = background
@@ -234,6 +258,11 @@ export function kMeansQuantizeColors(
     maxIterations = 15,
     seed = 42,
     alphaThreshold = BACKGROUND_ALPHA_THRESHOLD,
+    // Near-white cells are background too. This is the fallback for cut-outs
+    // whose alpha was lost somewhere upstream - the normal outcome if the file
+    // was ever written as .jpg - and it costs a normal photo almost nothing,
+    // because a real subject rarely contains cells above 0.93 luminance.
+    whiteThreshold = BACKGROUND_WHITE_THRESHOLD,
     // "lab" clusters in CIELAB, where Euclidean distance approximates
     // PERCEIVED difference. "rgb" is the original behaviour, kept so the two
     // can be compared on the same photo. Everything downstream is unchanged:
@@ -253,6 +282,12 @@ export function kMeansQuantizeColors(
       const parsed = parseRGBA(colorGrid[row][col]);
       parsedGrid[row][col] = parsed;
       if (!parsed || parsed.a < alphaThreshold) continue;
+
+      // Luminance, not a flat RGB average: the eye weights green far more
+      // than blue, and a plain mean would misjudge which cells look white.
+      const lum =
+        (0.2126 * parsed.r + 0.7152 * parsed.g + 0.0722 * parsed.b) / 255;
+      if (lum >= whiteThreshold) continue;
       pointIndexGrid[row][col] = points.length;
       // sqDist works in whatever space we hand it - it is just Pythagoras -
       // so the clustering code below needs no changes at all. Only the

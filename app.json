@@ -23,7 +23,10 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.nguyn3009.linedash"
+      "package": "com.nguyn3009.linedash",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -48,6 +51,12 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "390d157e-fff7-4bb3-8f9d-0a6cf73d19e0"
+      }
+    }
   }
 }
