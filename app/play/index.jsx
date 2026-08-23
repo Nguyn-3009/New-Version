@@ -6,6 +6,7 @@ import {
 } from "react-native-gesture-handler";
 import {
   runOnJS,
+  runOnUI,
   useDerivedValue,
   useSharedValue,
 } from "react-native-reanimated";
@@ -22,7 +23,7 @@ import {
 } from "../../utils/gridImageStore";
 import { markCleared } from "../../utils/levelProgress";
 import { livesFor } from "../../utils/gameRules";
-import FlightLine from "../../components/FlightLine";
+import FlightSlot from "../../components/FlightSlot";
 import { compileLines } from "../../utils/lineBatch";
 import {
   buildTileIndex,
@@ -50,6 +51,17 @@ import {
   LINE_TRIGGERS,
   onTap,
 } from "../../utils/gameShared";
+import {
+  FLIGHT_GEOM,
+  POOL_SIZE,
+  buildFlightGeom,
+  launchFlight,
+  resetPool,
+} from "../../utils/flightPool";
+
+// Stable slot indices for the flight pool. Module scope so the array identity
+// never changes and the pool never remounts.
+const POOL_SLOTS = Array.from({ length: POOL_SIZE }, (_, i) => i);
 
 // ---------------------------------------------------------------------------
 // Puzzle loading
@@ -147,7 +159,13 @@ function loadPuzzle(lines) {
   LINE_DOTS_MAP.value = buildLineDotsMap(lines);
   LINE_DIRS.value = buildLineDirs(lines);
   onTap.value = 0;
-  return compileLines(lines);
+
+  const compiled = compileLines(lines);
+  // Geometry the UI thread needs to fly an arrow without a React round trip.
+  // Assigned HERE, alongside the other three, so a puzzle load stays ONE batch
+  // of top-level shared-value writes rather than growing a second one later.
+  FLIGHT_GEOM.value = buildFlightGeom(compiled);
+  return compiled;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +217,17 @@ export default function AnimatedDashedLines() {
   const [compiled, setCompiled] = useState(() =>
     loadPuzzle(getActiveLinesSnapshot()),
   );
-  const [flights, setFlights] = useState([]);
+  // Which lines are airborne. A ref, not state: nothing about the render tree
+  // depends on it any more, and the whole point is to stop committing.
+  const flyingRef = useRef(new Set());
+
+  const tileIndex = useMemo(() => buildTileIndex(compiled), [compiled]);
+
+  // Tiles are kept as STATE and patched in place. Re-recording all 25 on every
+  // flight change cost ~42 ms per launch AND per landing - so tapping a few
+  // arrows queued dozens of full rebuilds back to back. But launching one line
+  // only changes the tiles that line touches; the other ~23 are identical.
+  const [tiles, setTiles] = useState([]);
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
 
   const escapedRef = useRef(new Set());
@@ -307,7 +335,8 @@ export default function AnimatedDashedLines() {
   const reload = useCallback((lines) => {
     activeLinesRef.current = lines;
     escapedRef.current = new Set();
-    setFlights([]);
+    flyingRef.current = new Set();
+    runOnUI(resetPool)();
     setSolved(false);
     setLives(livesFor(getPuzzleMeta()));
     setCompiled(loadPuzzle(lines));
@@ -340,28 +369,44 @@ export default function AnimatedDashedLines() {
     reload(activeLinesRef.current);
   }, [restart, reload]);
 
-  const startFlight = useCallback(
+  // Re-record only the tiles a given line touches. Same work recordOneTile
+  // always did - it just no longer waits on a flights-array diff to discover
+  // which line changed, because the caller already knows.
+  const repaintTilesFor = useCallback(
     (lineId) => {
       const i = compiled.indexById[lineId];
-      if (i === undefined || escapedRef.current.has(lineId)) return;
-      setFlights((prev) => {
-        if (prev.some((f) => f.id === lineId)) return prev;
-        return [
-          ...prev,
-          {
-            id: lineId,
-            color: compiled.colors[compiled.colorIdx[i]],
-            geom: {
-              flat: compiled.pts[i],
-              cum: compiled.cum[i],
-              total: compiled.total[i],
-              ang: compiled.ang[i],
-            },
-          },
-        ];
+      if (i === undefined) return;
+      const dirty = tileIndex.lineTiles[i];
+      if (!dirty || dirty.length === 0) return;
+
+      setTiles((prevTiles) => {
+        const byKey = new Map(prevTiles.map((t) => [t.key, t]));
+        for (const t of dirty) {
+          const rebuilt = recordOneTile(
+            compiled,
+            t,
+            tileIndex,
+            flyingRef.current,
+            escapedRef.current,
+          );
+          if (rebuilt) byKey.set(t, rebuilt);
+          else byKey.delete(t);
+        }
+        return [...byKey.values()];
       });
     },
-    [compiled],
+    [compiled, tileIndex],
+  );
+
+  // Called from the UI thread once a slot has actually been claimed, so the
+  // resting board can drop the arrow that is now airborne. This is the only
+  // React commit a launch still costs.
+  const notifyLaunch = useCallback(
+    (lineId) => {
+      flyingRef.current.add(lineId);
+      repaintTilesFor(lineId);
+    },
+    [repaintTilesFor],
   );
 
   // The board is solved when every arrow has escaped. Until now the game had
@@ -375,31 +420,44 @@ export default function AnimatedDashedLines() {
   const [lives, setLives] = useState(maxLives);
   const dead = lives <= 0;
 
-  const endFlight = useCallback(
+  // Called from the UI thread when a flight finishes, escaped or bounced. The
+  // game logic below is unchanged; only the bookkeeping around it moved off
+  // React state. setLives and setTiles land in the SAME commit thanks to
+  // React's auto-batching, so a landing costs one commit, not two.
+  const notifyDone = useCallback(
     (lineId, escaped) => {
-      // filter() always returns a new array, so bail out by identity when
-      // nothing was removed - otherwise a stray call forces a re-render and a
-      // tile re-record for no reason.
-      setFlights((prev) =>
-        prev.some((f) => f.id === lineId)
-          ? prev.filter((f) => f.id !== lineId)
-          : prev,
-      );
+      if (!flyingRef.current.delete(lineId)) return;
 
-      if (!escaped) {
+      if (escaped) {
+        escapedRef.current.add(lineId);
+        if (escapedRef.current.size >= compiled.count) {
+          setSolved(true);
+          const m = getPuzzleMeta();
+          if (m?.source === "level") markCleared(m.level);
+        }
+      } else {
         // Bounced: blocked by another arrow.
         setLives((l) => Math.max(0, l - 1));
-        return;
       }
 
-      escapedRef.current.add(lineId);
-      if (escapedRef.current.size >= compiled.count) {
-        setSolved(true);
-        const m = getPuzzleMeta();
-        if (m?.source === "level") markCleared(m.level);
-      }
+      repaintTilesFor(lineId);
     },
-    [compiled],
+    [compiled, repaintTilesFor],
+  );
+
+  // Claim a slot and start the arrow moving, entirely on the UI thread. The
+  // only JS hop is notifyLaunch, and only once the launch actually happened.
+  const launch = useCallback(
+    (lineId) => {
+      "worklet";
+      const g = FLIGHT_GEOM.value;
+      if (!g) return;
+      const i = g.indexById[lineId];
+      if (i === undefined) return;
+      if (launchFlight(i, notifyDone) < 0) return;
+      runOnJS(notifyLaunch)(lineId);
+    },
+    [notifyDone, notifyLaunch],
   );
 
   // -------------------------------------------------------------------------
@@ -456,12 +514,12 @@ export default function AnimatedDashedLines() {
             foundLineId = lineId;
             if (isThrough(lineId)) {
               clearId(lineId);
-              runOnJS(startFlight)(lineId);
+              launch(lineId);
               return;
             }
           }
           if (r === endRow && c === endCol && foundLineId) {
-            runOnJS(startFlight)(foundLineId);
+            launch(foundLineId);
           }
         }
       }
@@ -478,58 +536,18 @@ export default function AnimatedDashedLines() {
   // Rendering
   // -------------------------------------------------------------------------
 
-  // Tile geometry never changes for a puzzle, so the index is built once.
-  const tileIndex = useMemo(() => buildTileIndex(compiled), [compiled]);
-
-  // Tiles are kept as STATE and patched in place. Re-recording all 25 on every
-  // flight change cost ~42 ms per launch AND per landing - so tapping a few
-  // arrows queued dozens of full rebuilds back to back. But launching one line
-  // only changes the tiles that line touches; the other ~23 are identical.
-  const [tiles, setTiles] = useState([]);
-
   useEffect(() => {
-    const flying = new Set(flights.map((f) => f.id));
-    setTiles(recordAllTiles(compiled, tileIndex, flying, escapedRef.current));
+    setTiles(
+      recordAllTiles(compiled, tileIndex, flyingRef.current, escapedRef.current),
+    );
     // Full rebuild only when the puzzle itself changes.
   }, [compiled, tileIndex]);
 
-  // Patch just the dirty tiles whenever the flying set changes.
-  const prevFlyingRef = useRef(new Set());
-  useEffect(() => {
-    const flying = new Set(flights.map((f) => f.id));
-    const prev = prevFlyingRef.current;
-
-    const changed = [];
-    for (const id of flying) if (!prev.has(id)) changed.push(id);
-    for (const id of prev) if (!flying.has(id)) changed.push(id);
-    prevFlyingRef.current = flying;
-    if (changed.length === 0) return;
-
-    const dirty = new Set();
-    for (const id of changed) {
-      const i = compiled.indexById[id];
-      if (i === undefined) continue;
-      for (const t of tileIndex.lineTiles[i] ?? []) dirty.add(t);
-    }
-    if (dirty.size === 0) return;
-
-    setTiles((prevTiles) => {
-      const t0 = Date.now(); // ← add
-      const byKey = new Map(prevTiles.map((t) => [t.key, t]));
-      for (const t of dirty) {
-        const rebuilt = recordOneTile(
-          compiled,
-          t,
-          tileIndex,
-          flying,
-          escapedRef.current,
-        );
-        if (rebuilt) byKey.set(t, rebuilt);
-        else byKey.delete(t);
-      }
-      return [...byKey.values()];
-    });
-  }, [flights, compiled, tileIndex]);
+  // The per-flight dirty-tile patching that used to live here is now driven
+  // directly by notifyLaunch / notifyDone. It ran off a diff of the `flights`
+  // state, which meant a launch cost two commits: one to add the flight, one
+  // to patch the tiles. The caller already knows which line changed, so the
+  // diff - and the extra commit - were both avoidable.
 
   const gridPicture = useMemo(() => {
     const recorder = Skia.PictureRecorder();
@@ -571,14 +589,10 @@ export default function AnimatedDashedLines() {
               {tiles.map((t) => (
                 <Picture key={t.key} picture={t.picture} />
               ))}
-              {flights.map((f) => (
-                <FlightLine
-                  key={f.id}
-                  id={f.id}
-                  geom={f.geom}
-                  color={f.color}
-                  onDone={endFlight}
-                />
+              {/* Fixed-size pool. These mount once and never unmount, so no
+                  launch or landing changes the shape of this tree. */}
+              {POOL_SLOTS.map((i) => (
+                <FlightSlot key={i} index={i} onDone={notifyDone} />
               ))}
             </Group>
           </Canvas>
