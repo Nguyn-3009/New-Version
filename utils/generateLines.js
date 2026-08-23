@@ -43,13 +43,23 @@
  *     disqualify a ray - clearing them first is a legitimate dependency, and
  *     that is where the puzzle's difficulty comes from.
  *
- *   RULE 4 (REMOVED): a free cell with zero free same-cluster neighbors used
- *     to be marked blank, which was the ONLY significant source of blank
- *     cells (~3.7% of the grid; escape rays contribute ~0 because they stop
- *     at the first already-decided cell). Such a cell now becomes a valid
- *     1-cell arrow instead, so the rendered image has no holes. A 1-cell
- *     arrow still obeys every other rule: it is a place-head, it points
- *     outward, and its escape ray is reserved exactly as before.
+ *   RULE 4 (OPTIONAL - see `allowSingleCellArrows`): a free cell with zero
+ *     free same-cluster neighbors is marked blank. This was the ONLY
+ *     significant source of blank cells (~3.7% of the grid; escape rays
+ *     contribute ~0 because they stop at the first already-decided cell).
+ *
+ *     With the rule OFF (the default), such a cell becomes a valid 1-cell
+ *     arrow instead, so the rendered image has no holes. A 1-cell arrow still
+ *     obeys every other rule: it is a place-head, it points outward, and its
+ *     escape ray is reserved exactly as before. The cost is a board dotted
+ *     with single taps, which reads as busy rather than as puzzle.
+ *
+ *     With the rule ON, those cells become holes. Fewer trivial arrows, but
+ *     the picture stops being airtight.
+ *
+ *     Note that "no 1-cell arrows AND no holes" is not achievable in general
+ *     - a lone pixel of its own colour has no legal third option. See the
+ *     note at the bottom of this file.
  *
  * Output shape: [{ id, color, points: [{row,col}, ...] }, ...] where
  * `points` only contains the *turning* points (start, corners, end) -
@@ -95,7 +105,28 @@ function paletteToColor(rgb) {
 export function generateLinesData(
   labelGrid,
   palette,
-  { seed = 1337, minBodyLength = 1, maxBodyLength = 375, straightness = 0.25, spreadHeads = true } = {},
+  {
+    seed = 1337,
+    minBodyLength = 1,
+    maxBodyLength = 375,
+    straightness = 0.25,
+    spreadHeads = true,
+    // RULE 4, back as a switch.
+    //
+    // true  (default, current behaviour): a free cell with no free
+    //       same-cluster neighbour becomes a 1-CELL ARROW. Every cell ends up
+    //       drawn, so the finished board has no holes and reads as the photo.
+    // false (RULE 4 as originally written): that cell is marked BLANK instead.
+    //       Fewer trivial taps and a less fiddly board, at the cost of holes -
+    //       this was measured at ~3.7% of the grid, and blanks are the only
+    //       significant source of them.
+    //
+    // The default reproduces today's output exactly, so existing seeds and
+    // GENERATOR_VERSION are unaffected. Setting it to false DOES change the
+    // board for a given seed - fine for levels, but a daily generated with a
+    // different value is a different puzzle.
+    allowSingleCellArrows = true,
+  } = {},
 ) {
   const rng = mulberry32(seed);
   const rows = labelGrid.length;
@@ -129,6 +160,10 @@ export function generateLinesData(
     const k = fd.length;
 
     if (k === 0) {
+      // No free same-cluster neighbour, so this cell can never be part of a
+      // longer arrow. RULE 4 decides what happens to it.
+      if (!allowSingleCellArrows) return { kind: "blank" };
+
       // Isolated cell -> a 1-cell arrow. Same extremeness requirement: only a
       // direction whose entire ray is clear of available cells qualifies.
       // Picking the "cheapest" one instead still blanked whatever it crossed,
@@ -395,6 +430,14 @@ export function generateLinesData(
 
     const info = candidateInfo(r, c);
 
+    if (info.kind === "blank") {
+      // RULE 4 with singles disabled. This IS progress - the free pool shrank
+      // and the neighbours got requeued - so sinceProgress resets.
+      markBlank(r, c);
+      sinceProgress = 0;
+      continue;
+    }
+
     if (
       info.kind === "interior" ||
       info.kind === "corridor" ||
@@ -460,3 +503,40 @@ export function generateLinesData(
 
   return { lines, blanks };
 }
+// ---------------------------------------------------------------------------
+// WHY "NO 1-CELL ARROWS AND NO HOLES" IS NOT ACHIEVABLE
+// ---------------------------------------------------------------------------
+//
+// Every cell has to end up in exactly one of three states: part of an arrow of
+// 2+ cells, a 1-cell arrow, or blank. Turning off BOTH of the last two means
+// every cell must belong to an arrow of 2+ cells of its OWN cluster (RULE 3).
+//
+// So the question is really: can every connected same-cluster region always be
+// partitioned into paths of 2 or more cells? No, and two counterexamples are
+// enough:
+//
+//  1. A LONE PIXEL. One cell whose four neighbours are all other clusters.
+//     There is no same-cluster cell to pair it with, so no arrow of 2+ can
+//     ever contain it. K-Means on a photo produces these constantly - that is
+//     what speckle is.
+//
+//  2. A T-SHAPE (four cells: a centre plus three of its neighbours). Each of
+//     the three outer cells touches only the centre, so any arrow containing
+//     one of them must run through the centre. Only one arrow can use the
+//     centre, which strands the other two as singletons. Impossible despite
+//     the region having four cells and being connected.
+//
+// The general test, if it is ever wanted: a grid region is bipartite (colour
+// cells by (row+col) parity), and it can be split into paths of 2+ exactly
+// when it has a matching covering all its cells, or all but one when the count
+// is odd. The T-shape fails on parity alone - one cell of one parity against
+// three of the other.
+//
+// THE PRACTICAL ROUTE to a hole-free board with almost no singletons is to fix
+// the LABEL GRID before generation, not the algorithm here: merge speckle into
+// the perceptually nearest adjacent cluster (a despeckle / majority pass on
+// labelGrid, cheapest in CIELAB via colorSpace.js) so those regions stop
+// existing. That trades a small colour error at the noisiest pixels - which is
+// where the eye is least able to tell - for a board with neither holes nor a
+// scattering of one-tap arrows. It cannot be driven to a guaranteed zero, but
+// it can get close enough that the difference stops mattering.

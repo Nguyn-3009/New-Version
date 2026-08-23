@@ -32,6 +32,9 @@ export function loadPuzzleFromRecipe(recipe, meta) {
   const { lines, blanks } = generateLinesData(labelGrid, palette, {
     seed: recipe.seed ?? 1,
     straightness: recipe.straightness ?? 0.75,
+    // RULE 4. Omitted from a recipe means singles are allowed, which is the
+    // long-standing behaviour, so existing levels and dailies are unchanged.
+    allowSingleCellArrows: recipe.allowSingleCellArrows ?? true,
   });
 
   setPuzzleMeta(meta);
