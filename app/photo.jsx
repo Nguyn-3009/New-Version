@@ -23,7 +23,7 @@ import {
 // independent 125s before, which is how CANVAS_WIDTH=200 once produced a
 // labelGrid addressing rows the trigger grid didn't have.
 const GRID_SIZE = GRID_ROWS;
-const PALETTE_SIZE = 4; // Number of colors for K-Means color quantization
+const PALETTE_SIZE = 8; // Number of colors for K-Means color quantization
 
 export default function PhotoScreen() {
   const router = useRouter();
