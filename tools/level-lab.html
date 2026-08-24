@@ -93,6 +93,8 @@ $("root").outerHTML = `
     <button class="ghost" id="reroll">Reroll seed</button>
 
     <label><input type="checkbox" id="spread"> spreadHeads (spaces arrows out, costs coverage)</label>
+
+    <label><input type="checkbox" id="rule4"> RULE 4 (blank lone cells instead of making 1-cell arrows)</label>
   </div>
 
   <div class="panel">
@@ -104,6 +106,7 @@ $("root").outerHTML = `
     <table>
       <tr><td>arrows</td><td id="sArrows">–</td></tr>
       <tr><td>blank cells</td><td id="sBlanks">–</td></tr>
+      <tr><td>1-cell arrows</td><td id="sSingles">–</td></tr>
       <tr><td>turn points</td><td id="sTurns">–</td></tr>
       <tr><td>clearable at start</td><td id="sFree">–</td></tr>
       <tr><td>dependency depth</td><td id="sDepth">–</td></tr>
@@ -154,6 +157,9 @@ function currentRecipe() {
     straightness: +$("str").value / 100,
     seed: +$("seed").value || 1,
     spreadHeads: $("spread").checked,
+    // Checkbox reads as "RULE 4 on", which is the opposite of the generator's
+    // option name - the generator asks whether singles are ALLOWED.
+    allowSingleCellArrows: !$("rule4").checked,
   };
 }
 
@@ -220,6 +226,7 @@ function run() {
     seed: rec.seed,
     straightness: rec.straightness,
     spreadHeads: rec.spreadHeads,
+    allowSingleCellArrows: rec.allowSingleCellArrows,
   });
   last = { rec, lines };
 
@@ -229,6 +236,20 @@ function run() {
   $("sArrows").textContent = lines.length;
   $("sBlanks").textContent = blanks.length;
   $("sBlanks").className = blanks.length > 0 ? "warn" : "";
+
+  // A 1-cell arrow compresses to a single turn point (or a degenerate pair).
+  const singles = lines.filter((l) => {
+    const p = l.points;
+    return (
+      p.length === 1 ||
+      (p.length === 2 && p[0].row === p[1].row && p[0].col === p[1].col)
+    );
+  }).length;
+  $("sSingles").textContent =
+    lines.length > 0
+      ? `${singles} (${Math.round((singles / lines.length) * 100)}%)`
+      : singles;
+  $("sSingles").className = singles / Math.max(1, lines.length) > 0.25 ? "warn" : "";
   $("sTurns").textContent = turns;
   $("sFree").textContent = a.free0;
   $("sDepth").textContent = a.depth;
@@ -291,6 +312,9 @@ $("add").onclick = () => {
     ...(r.shape ? { shape: r.shape } : { region: r.region }),
     k: r.k, pattern: r.pattern, straightness: r.straightness, seed: r.seed,
     ...(r.spreadHeads ? { spreadHeads: true } : {}),
+    ...(r.allowSingleCellArrows === false
+      ? { allowSingleCellArrows: false }
+      : {}),
     _arrows: last.lines.length,
   });
   renderList();
