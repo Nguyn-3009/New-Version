@@ -11,11 +11,12 @@
 // the head advances ~2.1 grid cells per frame, so checking only where the head
 // *is* skips every other cell.
 
-import { Path, Skia } from "@shopify/react-native-skia";
+import { Group, Path, Skia } from "@shopify/react-native-skia";
 import {
   Easing,
   runOnJS,
   useDerivedValue,
+  useSharedValue,
   withTiming,
 } from "react-native-reanimated";
 
@@ -86,6 +87,60 @@ function firstHit(flat, cum, total, ang, id, fromLen, toLen) {
   return -1;
 }
 
+// Returned by an idle slot, and never mutated. Reanimated dedupes shared-value
+// writes by identity (valueSetter bails when `_value === value`), so handing
+// back the SAME empty path every frame means an idle slot never notifies the
+// renderer at all.
+const EMPTY_PATH = Skia.Path.Make();
+
+// Phase 1 and idle both draw in absolute world coordinates. Same identity
+// trick: a constant means no write, so no redraw.
+const NO_SHIFT = [{ translateX: 0 }, { translateY: 0 }];
+
+/**
+ * Geometry that does not change for the duration of one flight.
+ *
+ * THE OBSERVATION THIS RESTS ON: appendBody is always asked for the window
+ * [headLen - total, headLen], which is *exactly* `total` long, every frame. The
+ * body is therefore a RIGID shape sliding forward, not a shape that morphs -
+ * and once headLen passes 2*total the tail has cleared the last turn point, so
+ * that rigid shape is a plain straight segment along the escape direction.
+ *
+ * From then to the end of the flight the path is constant and only its
+ * position changes, which a transform can do for free. Escape rays run
+ * MAX_PROGRESS*SPEED = 2560px against bodies of typically 60-180px, so this
+ * covers roughly 95% of the frames of a flight.
+ */
+function buildRigid(g, i) {
+  "worklet";
+  const flat = g.pts[i];
+  const cum = g.cum[i];
+  const total = g.total[i];
+  const ang = g.ang[i];
+
+  const n = cum.length;
+  const ex = flat[(n - 1) * 2];
+  const ey = flat[(n - 1) * 2 + 1];
+  const dx = Math.cos(ang);
+  const dy = Math.sin(ang);
+
+  // Body at the moment the tail leaves the polyline: a straight segment of
+  // length `total` starting at the polyline's end. A 1-cell arrow has
+  // total === 0, so this is a degenerate segment - which is exactly how
+  // recordOneTile draws one at rest, and the round cap makes it a dot.
+  const body = Skia.Path.Make();
+  body.moveTo(ex, ey);
+  body.lineTo(ex + dx * total, ey + dy * total);
+
+  // Arrowhead where it sits at rest. It rides `headLen - total` along the ray,
+  // which is 0 at progress 0, so the head is rigid for the WHOLE flight - it
+  // never needed rebuilding even during the peel.
+  const head = Skia.Path.Make();
+  appendHead(head, ex, ey, ang);
+
+  return { forLine: i, body, head, dx, dy, total };
+}
+
 export default function FlightSlot({ index, onDone }) {
   // Bind THIS slot's shared values to locals before any worklet closes over
   // them. Writing SLOT_PROGRESS[index].value inside the worklet would capture
@@ -96,12 +151,24 @@ export default function FlightSlot({ index, onDone }) {
   const settled = SLOT_SETTLED[index];
   const prevLen = SLOT_PREVLEN[index];
 
-  const bodyPath = useDerivedValue(() => {
-    const p = Skia.Path.Make();
+  // The head arc-length for THIS frame, written by bodyPath and read by both
+  // transforms.
+  //
+  // Making the transforms depend on it is what pins the execution order:
+  // Reanimated runs a mapper before the ones that read its output. On the frame
+  // a bounce is detected, headLen is overridden to the exact contact point, and
+  // a transform that recomputed it from progress on its own could run first and
+  // render the arrow a frame PAST the blocker - the overshoot the contact-length
+  // logic exists to prevent.
+  const headLenSV = useSharedValue(0);
 
+  // Rigid geometry for the flight currently in this slot.
+  const rigid = useSharedValue(null);
+
+  const bodyPath = useDerivedValue(() => {
     const g = FLIGHT_GEOM.value;
     const i = line.value;
-    if (!g || i < 0) return p; // slot idle — draw nothing
+    if (!g || i < 0) return EMPTY_PATH; // slot idle — draw nothing
 
     const flat = g.pts[i];
     const cum = g.cum[i];
@@ -151,7 +218,23 @@ export default function FlightSlot({ index, onDone }) {
     }
 
     prevLen.value = headLen;
+    headLenSV.value = headLen;
 
+    let r = rigid.value;
+    if (!r || r.forLine !== i) {
+      r = buildRigid(g, i);
+      rigid.value = r;
+    }
+
+    // Tail has cleared the last turn point: the body is the constant straight
+    // segment, and the transform below slides it. Returning the SAME object
+    // means Reanimated skips the write entirely, so the renderer never re-reads
+    // the path and no Skia object is allocated for the rest of the flight.
+    if (headLen >= 2 * total) return r.body;
+
+    // Still peeling off the corners, where the shape genuinely does change.
+    // Short: this is roughly the first `total` pixels of a 2560px flight.
+    const p = Skia.Path.Make();
     appendBody(p, flat, cum, total, ang, headLen - total, headLen, {
       x: 0,
       y: 0,
@@ -159,24 +242,31 @@ export default function FlightSlot({ index, onDone }) {
     return p;
   });
 
+  // Body slides only once it has gone rigid; during the peel bodyPath is
+  // already in absolute coordinates, so the transform must stay identity.
+  const bodyTransform = useDerivedValue(() => {
+    const r = rigid.value;
+    if (!r || line.value < 0) return NO_SHIFT;
+    const s = headLenSV.value - 2 * r.total;
+    if (s <= 0) return NO_SHIFT;
+    return [{ translateX: r.dx * s }, { translateY: r.dy * s }];
+  });
+
+  // The head is rigid from the first frame, so this one is never identity-only
+  // for shape reasons - just position.
   const headPath = useDerivedValue(() => {
-    const p = Skia.Path.Make();
-
-    const g = FLIGHT_GEOM.value;
     const i = line.value;
-    if (!g || i < 0) return p;
+    const r = rigid.value;
+    if (i < 0 || !r || r.forLine !== i) return EMPTY_PATH;
+    return r.head;
+  });
 
-    const headLen = progress.value * SPEED + g.total[i];
-    const h = pointAtLength(
-      g.pts[i],
-      g.cum[i],
-      g.total[i],
-      g.ang[i],
-      headLen,
-      { x: 0, y: 0 },
-    );
-    appendHead(p, h.x, h.y, g.ang[i]);
-    return p;
+  const headTransform = useDerivedValue(() => {
+    const r = rigid.value;
+    if (!r || line.value < 0) return NO_SHIFT;
+    const s = headLenSV.value - r.total;
+    if (s <= 0) return NO_SHIFT;
+    return [{ translateX: r.dx * s }, { translateY: r.dy * s }];
   });
 
   // Colour follows whichever line the slot currently holds. An idle slot draws
@@ -190,15 +280,19 @@ export default function FlightSlot({ index, onDone }) {
 
   return (
     <>
-      <Path
-        path={bodyPath}
-        color={color}
-        style="stroke"
-        strokeWidth={STROKE_WIDTH}
-        strokeCap="round"
-        strokeJoin="round"
-      />
-      <Path path={headPath} color={color} style="fill" />
+      <Group transform={bodyTransform}>
+        <Path
+          path={bodyPath}
+          color={color}
+          style="stroke"
+          strokeWidth={STROKE_WIDTH}
+          strokeCap="round"
+          strokeJoin="round"
+        />
+      </Group>
+      <Group transform={headTransform}>
+        <Path path={headPath} color={color} style="fill" />
+      </Group>
     </>
   );
 }
