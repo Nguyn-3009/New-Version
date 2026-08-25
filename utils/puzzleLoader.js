@@ -10,6 +10,7 @@
 // and stays quiet for a photo.
 
 import { generateLinesData } from "./generateLines";
+import { despeckleLabels } from "./despeckle";
 import { getLevelRecipe, getDailyRecipe } from "./levelRecipes";
 import { makePatternGrid } from "./patternGrid";
 import { setGeneratedLines, setPuzzleMeta } from "./gridImageStore";
@@ -29,7 +30,17 @@ export function loadPuzzleFromRecipe(recipe, meta) {
     shape: recipe.shape ?? null,
   });
 
-  const { lines, blanks } = generateLinesData(labelGrid, palette, {
+  // Despeckling is OPT-IN here, unlike the photo screen. A recipe is a promise
+  // that seed N rebuilds the same board on every device and every app version,
+  // and turning this on changes the board for a given seed. Setting it on
+  // existing levels is fine; doing it for dailies means bumping
+  // GENERATOR_VERSION, per the note in levelRecipes.js.
+  const cleanLabels = recipe.despeckle
+    ? despeckleLabels(labelGrid, palette, { minRegionSize: recipe.despeckle })
+        .labelGrid
+    : labelGrid;
+
+  const { lines, blanks } = generateLinesData(cleanLabels, palette, {
     seed: recipe.seed ?? 1,
     straightness: recipe.straightness ?? 0.75,
     // RULE 4. Omitted from a recipe means singles are allowed, which is the
