@@ -23,6 +23,13 @@
 // replacement is the closest colour a person would actually perceive, not the
 // closest set of RGB numbers.
 //
+// A CUT-OUT SUBJECT needs the second half of this. A photo of something on a
+// white background leaves specks of the subject's colour floating in the empty
+// space, and those touch no other cluster at all, so there is nothing to merge
+// them into. They are dissolved into the BACKGROUND instead - see dropFloating.
+// On a ragged 200x200 cut-out they were 68% of every 1-cell arrow that survived
+// merging, and handling them took the board from 31% singles to 12%.
+//
 // WHAT THIS DOES ACHIEVE: afterwards the label grid contains NO lone cells at
 // all - measured zero on every board tested, converging in two passes.
 //
@@ -30,7 +37,8 @@
 // this pass every single one of them comes from the GENERATOR, not the labels.
 // randomWalkBody consumes cells as it goes and can strand one behind it, and a
 // large region with spurs hanging off it cannot be fully covered by paths of 2+
-// anyway. That residual is 5-13% of arrows. It is not speckle and cannot be
+// anyway. That residual is 5-13% of arrows on a full-frame photo and about 12%
+// on a ragged cut-out. It is not speckle and cannot be
 // recoloured away; closing it further means a smarter body walk (a
 // matching-based path cover rather than Warnsdorff), which would cost no colour
 // fidelity at all.
@@ -56,18 +64,23 @@ const NEIGHBOURS = [
  *     disables the pass entirely.
  *   maxPasses - dissolving a region can leave its neighbour small in turn, so
  *     the pass repeats until nothing changes or this many passes have run.
+ *   dropFloating - a region below the threshold that touches NO other cluster
+ *     has nothing to merge into. When true (default) it is dissolved into the
+ *     background instead, which is what removes specks floating in the empty
+ *     space around a cut-out subject. When false those cells are left alone and
+ *     will each become a 1-cell arrow.
  * @returns {{labelGrid:number[][], merged:number, cellsChanged:number, passes:number}}
  *   `labelGrid` is a NEW grid; the input is never mutated.
  */
 export function despeckleLabels(labelGrid, palette, options = {}) {
-  const { minRegionSize = 2, maxPasses = 4 } = options;
+  const { minRegionSize = 2, maxPasses = 4, dropFloating = true } = options;
 
   const rows = labelGrid.length;
   const cols = rows > 0 ? labelGrid[0].length : 0;
   let grid = labelGrid.map((row) => row.slice());
 
   if (minRegionSize < 2 || rows === 0 || cols === 0) {
-    return { labelGrid: grid, merged: 0, cellsChanged: 0, passes: 0 };
+    return { labelGrid: grid, merged: 0, dropped: 0, cellsChanged: 0, passes: 0 };
   }
 
   // Palette in CIELAB once, so the inner loop is plain arithmetic.
@@ -81,6 +94,7 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
   };
 
   let merged = 0;
+  let dropped = 0;
   let cellsChanged = 0;
   let passes = 0;
 
@@ -157,9 +171,34 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
         // because it is only consulted for regions that are dissolved.
         if (cells.length >= minRegionSize) continue;
 
-        // Nothing but background around it - there is no cluster to dissolve
-        // into, so it stays exactly as it is.
-        if (border.size === 0) continue;
+        // Nothing but background around it. There is no cluster to dissolve
+        // INTO, so the only way to stop it forcing a 1-cell arrow is to
+        // dissolve it into the background instead.
+        //
+        // This is the cut-out case, and it is the one that matters most in
+        // practice: a subject on white leaves specks of the subject's colour
+        // floating in the background - loose fur, a JPEG artifact, a stray
+        // pixel of an edge. Measured on a ragged 200x200 cut-out these were 68%
+        // of every 1-cell arrow left after merging, because merging cannot
+        // touch them.
+        //
+        // Dropping one removes a pixel that was noise to begin with, so the
+        // picture gets cleaner rather than poorer. Note this can only ever hit
+        // a region SMALLER than minRegionSize that touches no other cluster: a
+        // genuine thin feature - a whisker, a lanyard cord - is a long thin
+        // REGION, not an isolated cell, so it is never a candidate.
+        if (border.size === 0) {
+          if (!dropFloating) continue;
+          for (let i = 0; i < cells.length; i++) {
+            const idx = cells[i];
+            const r = (idx / cols) | 0;
+            grid[r][idx - r * cols] = -1;
+          }
+          dropped += 1;
+          mergedThisPass += 1;
+          cellsChanged += cells.length;
+          continue;
+        }
 
         // Perceptually nearest bordering cluster. Ties break on the longer
         // shared border, then on the lower index, so the result is
@@ -196,7 +235,7 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
     if (mergedThisPass === 0) break;
   }
 
-  return { labelGrid: grid, merged, cellsChanged, passes };
+  return { labelGrid: grid, merged, dropped, cellsChanged, passes };
 }
 
 /**

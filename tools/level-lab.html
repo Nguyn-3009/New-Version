@@ -234,10 +234,11 @@ function run() {
   const live = labelGrid.flat().filter((v) => v !== -1).length;
   const cleaned = rec.despeckle
     ? despeckleLabels(labelGrid, palette, { minRegionSize: rec.despeckle })
-    : { labelGrid, cellsChanged: 0 };
+    : { labelGrid, cellsChanged: 0, merged: 0, dropped: 0 };
   $("despVal").textContent = rec.despeckle ? `min region ${rec.despeckle}` : "off";
   $("sDesp").textContent = cleaned.cellsChanged
-    ? `${cleaned.cellsChanged} (${((cleaned.cellsChanged / live) * 100).toFixed(1)}%)`
+    ? `${cleaned.cellsChanged} (${((cleaned.cellsChanged / live) * 100).toFixed(1)}%)` +
+      (cleaned.dropped ? ` · ${cleaned.dropped} dropped` : "")
     : "0";
 
   const { lines, blanks } = generateLinesData(cleaned.labelGrid, palette, {
