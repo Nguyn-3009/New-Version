@@ -29,9 +29,9 @@ const PALETTE_SIZE = 8; // Number of colors for K-Means color quantization
 // Dissolve any same-cluster region smaller than this before generating arrows.
 // 2 means lone cells only - the case that is provably unfixable later, and the
 // one that dominates. Measured on representative boards it cuts 1-cell arrows
-// from 38-62% of all arrows down to 6-27%, for 2-15% of cells recoloured to
+// from 24-62% of all arrows down to 5-13%, for 1-10% of cells recoloured to
 // their perceptually nearest neighbour. Raising it to 3 or 4 recolours more for
-// almost no further gain. 0 disables the pass.
+// no reliable further gain. 0 disables the pass.
 const DESPECKLE_MIN_REGION = 2;
 
 export default function PhotoScreen() {

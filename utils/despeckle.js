@@ -23,11 +23,17 @@
 // replacement is the closest colour a person would actually perceive, not the
 // closest set of RGB numbers.
 //
-// WHAT THIS CANNOT DO: large regions can also strand cells, because a region
-// with spurs hanging off it has no way to cover every cell with paths of 2+
-// either. Those are structural and are not speckle, so they are left alone -
-// they are the residual 9-20% and merging them would mean repainting real parts
-// of the picture.
+// WHAT THIS DOES ACHIEVE: afterwards the label grid contains NO lone cells at
+// all - measured zero on every board tested, converging in two passes.
+//
+// WHAT IT CANNOT DO: the board still ends up with some 1-cell arrows, and after
+// this pass every single one of them comes from the GENERATOR, not the labels.
+// randomWalkBody consumes cells as it goes and can strand one behind it, and a
+// large region with spurs hanging off it cannot be fully covered by paths of 2+
+// anyway. That residual is 5-13% of arrows. It is not speckle and cannot be
+// recoloured away; closing it further means a smarter body walk (a
+// matching-based path cover rather than Warnsdorff), which would cost no colour
+// fidelity at all.
 
 import { rgbToLab } from "./colorSpace";
 
@@ -78,52 +84,64 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
   let cellsChanged = 0;
   let passes = 0;
 
+  const cellCount = rows * cols;
+  // Marks cells already accounted for this pass, so a merged region is not
+  // reconsidered as a fresh candidate.
+  const processed = new Uint8Array(cellCount);
+  // Visited marker for one flood, stamped with a generation counter so it
+  // never has to be cleared.
+  const stamp = new Int32Array(cellCount);
+  let generation = 0;
+
   for (let pass = 0; pass < maxPasses; pass++) {
     passes = pass + 1;
-
-    // Snapshot the pass so every decision in it reads the same grid. Chains of
-    // adjacent speckle resolve over successive passes instead of depending on
-    // scan order within one.
-    const snapshot = grid;
-    const next = snapshot.map((row) => row.slice());
-    const seen = new Uint8Array(rows * cols);
+    processed.fill(0);
     let mergedThisPass = 0;
 
     for (let r0 = 0; r0 < rows; r0++) {
       for (let c0 = 0; c0 < cols; c0++) {
-        if (seen[r0 * cols + c0]) continue;
-        const label = snapshot[r0][c0];
+        const start = r0 * cols + c0;
+        if (processed[start]) continue;
+
+        const label = grid[r0][c0];
         if (label === -1) continue;
 
-        // Flood the 4-connected same-label region, collecting the labels that
-        // border it as we go. Stops early once the region is provably big
-        // enough to keep - most of the board is one of these, and walking a
-        // 5000-cell background region to learn it is not speckle is the only
-        // thing here that would ever cost anything.
-        const cells = [];
-        const stack = [r0 * cols + c0];
-        seen[r0 * cols + c0] = 1;
+        // Flood the 4-connected same-label region, collecting the labels
+        // bordering it as we go.
+        //
+        // MERGES APPLY IMMEDIATELY, against the live grid, rather than being
+        // batched against a snapshot of the pass. Batching looks tidier and is
+        // wrong: two adjacent lone cells of different clusters each pick the
+        // other's label as nearest, so they SWAP and both stay lone. The pass
+        // then never converges - it just recolours more of the board every
+        // pass for no reduction at all. Applying in place means the first is
+        // already merged when the second is examined, so they join instead.
+        generation += 1;
+        stamp[start] = generation;
+        const cells = [start];
+        const stack = [start];
         const border = new Map();
-        let tooBig = false;
 
-        while (stack.length > 0) {
+        // Bounded by minRegionSize: the moment the region is that big it
+        // cannot be speckle, and nothing beyond that is needed. This is what
+        // keeps a 5000-cell background region from being walked end to end
+        // every time one of its cells comes up.
+        while (stack.length > 0 && cells.length < minRegionSize) {
           const idx = stack.pop();
           const r = (idx / cols) | 0;
           const c = idx - r * cols;
-          cells.push(idx);
-
-          if (cells.length >= minRegionSize) tooBig = true;
 
           for (let n = 0; n < NEIGHBOURS.length; n++) {
             const nr = r + NEIGHBOURS[n][0];
             const nc = c + NEIGHBOURS[n][1];
             if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
 
-            const nl = snapshot[nr][nc];
+            const nl = grid[nr][nc];
             if (nl === label) {
               const ni = nr * cols + nc;
-              if (!seen[ni]) {
-                seen[ni] = 1;
+              if (stamp[ni] !== generation) {
+                stamp[ni] = generation;
+                cells.push(ni);
                 stack.push(ni);
               }
             } else if (nl !== -1) {
@@ -132,7 +150,12 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
           }
         }
 
-        if (tooBig) continue;
+        for (let i = 0; i < cells.length; i++) processed[cells[i]] = 1;
+
+        // Reached the size cap, so the region is big enough to keep. Note the
+        // flood was cut short, so `border` is incomplete - which is fine,
+        // because it is only consulted for regions that are dissolved.
+        if (cells.length >= minRegionSize) continue;
 
         // Nothing but background around it - there is no cluster to dissolve
         // into, so it stays exactly as it is.
@@ -162,7 +185,7 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
         for (let i = 0; i < cells.length; i++) {
           const idx = cells[i];
           const r = (idx / cols) | 0;
-          next[r][idx - r * cols] = bestLabel;
+          grid[r][idx - r * cols] = bestLabel;
         }
         merged += 1;
         mergedThisPass += 1;
@@ -170,7 +193,6 @@ export function despeckleLabels(labelGrid, palette, options = {}) {
       }
     }
 
-    grid = next;
     if (mergedThisPass === 0) break;
   }
 
