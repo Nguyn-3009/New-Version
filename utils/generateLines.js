@@ -66,6 +66,8 @@
  * exactly what play/index.jsx's `expandSegments` already expects.
  */
 
+
+
 function mulberry32(a) {
   return function () {
     a |= 0;
@@ -125,7 +127,7 @@ export function generateLinesData(
     // GENERATOR_VERSION are unaffected. Setting it to false DOES change the
     // board for a given seed - fine for levels, but a daily generated with a
     // different value is a different puzzle.
-    allowSingleCellArrows = false,
+    allowSingleCellArrows = true,
   } = {},
 ) {
   const rng = mulberry32(seed);

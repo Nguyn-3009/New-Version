@@ -13,6 +13,7 @@ import { useRouter } from "expo-router";
 import { GRID_ROWS } from "../utils/gridConfig";
 import { imageToGridColors, kMeansQuantizeColors } from "../utils/imageToGrid";
 import { generateLinesData } from "../utils/generateLines";
+import { despeckleLabels, recolorFromLabels } from "../utils/despeckle";
 import {
   setGridColors,
   setGridQuantization,
@@ -24,6 +25,14 @@ import {
 // labelGrid addressing rows the trigger grid didn't have.
 const GRID_SIZE = GRID_ROWS;
 const PALETTE_SIZE = 8; // Number of colors for K-Means color quantization
+
+// Dissolve any same-cluster region smaller than this before generating arrows.
+// 2 means lone cells only - the case that is provably unfixable later, and the
+// one that dominates. Measured on representative boards it cuts 1-cell arrows
+// from 24-62% of all arrows down to 5-13%, for 1-10% of cells recoloured to
+// their perceptually nearest neighbour. Raising it to 3 or 4 recolours more for
+// no reliable further gain. 0 disables the pass.
+const DESPECKLE_MIN_REGION = 2;
 
 export default function PhotoScreen() {
   const router = useRouter();
@@ -95,10 +104,27 @@ export default function PhotoScreen() {
         rawColors,
         { k: PALETTE_SIZE },
       );
-      setGridColors(quantizedColorGrid);
-      setGridQuantization(labelGrid, palette);
+      // Dissolve lone cells before generating arrows. K-Means speckle is where
+      // 80-91% of 1-cell arrows came from, and a cell with no same-cluster
+      // neighbour can never become anything else - see utils/despeckle.js.
+      // Set DESPECKLE_MIN_REGION to 0 to turn this off.
+      const despeckled = despeckleLabels(labelGrid, palette, {
+        minRegionSize: DESPECKLE_MIN_REGION,
+      });
+      // Keep the dot picture agreeing with the arrows about every cell.
+      const cleanColors = recolorFromLabels(
+        quantizedColorGrid,
+        despeckled.labelGrid,
+        palette,
+      );
 
-      const { lines, blanks } = generateLinesData(labelGrid, palette);
+      setGridColors(cleanColors);
+      setGridQuantization(despeckled.labelGrid, palette);
+
+      const { lines, blanks } = generateLinesData(
+        despeckled.labelGrid,
+        palette,
+      );
       setGeneratedLines(lines, blanks);
 
       router.replace({

@@ -52,10 +52,11 @@ const $ = id => document.getElementById(id);
 // a level previewed in this tool is byte-identical to the level the app
 // builds from the same recipe. Requires a server (VSCode "Go Live") because
 // ES module imports are blocked on file://
-let makePatternGrid, generateLinesData, SHAPE_MASKS;
+let makePatternGrid, generateLinesData, SHAPE_MASKS, despeckleLabels;
 try {
   ({ makePatternGrid } = await import("../utils/patternGrid.js"));
   ({ generateLinesData } = await import("../utils/generateLines.js"));
+  ({ despeckleLabels } = await import("../utils/despeckle.js"));
   ({ SHAPE_MASKS } = await import("../utils/shapeMasks.js"));
 } catch (e) {
   $("root").innerHTML =
@@ -95,6 +96,9 @@ $("root").outerHTML = `
     <label><input type="checkbox" id="spread"> spreadHeads (spaces arrows out, costs coverage)</label>
 
     <label><input type="checkbox" id="rule4"> RULE 4 (blank lone cells instead of making 1-cell arrows)</label>
+
+    <label>Despeckle <span class="val" id="despVal">off</span></label>
+    <input type="range" id="desp" min="0" max="4" value="0">
   </div>
 
   <div class="panel">
@@ -107,6 +111,7 @@ $("root").outerHTML = `
       <tr><td>arrows</td><td id="sArrows">–</td></tr>
       <tr><td>blank cells</td><td id="sBlanks">–</td></tr>
       <tr><td>1-cell arrows</td><td id="sSingles">–</td></tr>
+      <tr><td>cells recoloured</td><td id="sDesp">–</td></tr>
       <tr><td>turn points</td><td id="sTurns">–</td></tr>
       <tr><td>clearable at start</td><td id="sFree">–</td></tr>
       <tr><td>dependency depth</td><td id="sDepth">–</td></tr>
@@ -140,7 +145,7 @@ sel.innerHTML =
   '<option value="">— square region —</option>' +
   Object.keys(SHAPE_MASKS).map(k => `<option value="${k}">${k}</option>`).join("");
 
-for (const id of ["shape","region","pattern","k","str","seed","spread"]) {
+for (const id of ["shape","region","pattern","k","str","seed","spread","rule4","desp"]) {
   $(id).oninput = run;
   $(id).onchange = run;
 }
@@ -160,6 +165,9 @@ function currentRecipe() {
     // Checkbox reads as "RULE 4 on", which is the opposite of the generator's
     // option name - the generator asks whether singles are ALLOWED.
     allowSingleCellArrows: !$("rule4").checked,
+    // 0 = off. Dissolves same-cluster regions smaller than this before
+    // generating, so lone cells stop forcing 1-cell arrows.
+    despeckle: +$("desp").value,
   };
 }
 
@@ -222,7 +230,17 @@ function run() {
   $("strVal").textContent = rec.straightness.toFixed(2);
 
   const { labelGrid, palette } = makePatternGrid(rec);
-  const { lines, blanks } = generateLinesData(labelGrid, palette, {
+
+  const live = labelGrid.flat().filter((v) => v !== -1).length;
+  const cleaned = rec.despeckle
+    ? despeckleLabels(labelGrid, palette, { minRegionSize: rec.despeckle })
+    : { labelGrid, cellsChanged: 0 };
+  $("despVal").textContent = rec.despeckle ? `min region ${rec.despeckle}` : "off";
+  $("sDesp").textContent = cleaned.cellsChanged
+    ? `${cleaned.cellsChanged} (${((cleaned.cellsChanged / live) * 100).toFixed(1)}%)`
+    : "0";
+
+  const { lines, blanks } = generateLinesData(cleaned.labelGrid, palette, {
     seed: rec.seed,
     straightness: rec.straightness,
     spreadHeads: rec.spreadHeads,
@@ -315,6 +333,7 @@ $("add").onclick = () => {
     ...(r.allowSingleCellArrows === false
       ? { allowSingleCellArrows: false }
       : {}),
+    ...(r.despeckle ? { despeckle: r.despeckle } : {}),
     _arrows: last.lines.length,
   });
   renderList();
