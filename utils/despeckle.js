@@ -43,7 +43,7 @@
 // matching-based path cover rather than Warnsdorff), which would cost no colour
 // fidelity at all.
 
-import { rgbToLab } from "./colorSpace";
+import { rgbToLab } from "./colorSpace.js";
 
 const NEIGHBOURS = [
   [-1, 0],
